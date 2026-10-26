@@ -457,16 +457,6 @@ fun HomeScreen(
             }
         }
 
-        // The cat sits on top of the selected app icon and jumps when the selection moves.
-        if (focused != null) {
-            JumpingCat(
-                x = tileX(state.focus).value + Metrics.TileW.value / 2f - CAT_W / 2f,
-                y = tileY(state.focus) - CAT_H + CAT_LIFT,
-                jumpKey = state.focus,
-                visible = state.mode == Mode.Browse,
-            )
-        }
-
         Box(Modifier.fillMaxSize().graphicsLayer { alpha = dim }.background(Color.Black))
 
         AnimatedVisibility(
@@ -492,7 +482,7 @@ fun HomeScreen(
                 .coerceIn(Metrics.Margin.value, 960f - Metrics.Margin.value - MenuWidth.value)
             val my = if (above) ty - MenuHeight.value - 14f else ty + Metrics.TileH.value + 40f
             AnimatedVisibility(
-                state.mode == Mode.Menu, Modifier.offset(mx.dp, my.dp),
+                state.mode == Mode.Menu, Modifier.offset(mx.d p, my.dp),
                 enter = fadeIn(tween(180)) + scaleIn(
                     spring(dampingRatio = 0.75f, stiffness = 600f), 0.9f, TransformOrigin(0.5f, if (above) 1f else 0f),
                 ),
