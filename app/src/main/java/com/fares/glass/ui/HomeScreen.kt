@@ -457,6 +457,16 @@ fun HomeScreen(
             }
         }
 
+        // The cat sits on top of the selected app icon and jumps when the selection moves.
+        if (focused != null) {
+            JumpingCat(
+                x = tileX(state.focus).value + Metrics.TileW.value / 2f - CAT_W / 2f,
+                y = tileY(state.focus) - CAT_H + CAT_LIFT,
+                jumpKey = state.focus,
+                visible = state.mode == Mode.Browse,
+            )
+        }
+
         Box(Modifier.fillMaxSize().graphicsLayer { alpha = dim }.background(Color.Black))
 
         AnimatedVisibility(
