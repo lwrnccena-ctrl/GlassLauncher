@@ -127,6 +127,8 @@ fun HomeScreen(
     val focusRequester = remember { FocusRequester() }
     // Selected button on the now playing card: -1 = none, 0 = previous, 1 = play/pause, 2 = next.
     var mediaFocus by remember { mutableIntStateOf(-1) }
+    // The Control Center switch for the music card (and its remote control).
+    val cardShown = NowPlaying.active && Features.music
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
     // Lets the now playing card see which media is playing.
     LaunchedEffect(Unit) { NowPlaying.ensureListener(context) }
@@ -144,9 +146,6 @@ fun HomeScreen(
     LaunchedEffect(apps.size) {
         if (apps.isNotEmpty() && state.focus > apps.lastIndex) state.focus = apps.lastIndex
     }
-
-    // The Control Center switches: music card (and its remote control) on or off.
-    val cardShown = NowPlaying.active && Features.music
 
     val row = state.row
     val scrollTarget = if (row == 0) 0f else (Metrics.TopRowY + Metrics.Pitch * row - Metrics.GridRowY).value
