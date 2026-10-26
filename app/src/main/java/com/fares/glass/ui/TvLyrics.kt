@@ -1,16 +1,24 @@
 package com.fares.glass.ui
 
 import android.os.SystemClock
-import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -19,13 +27,17 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -48,9 +60,42 @@ object TvScreen {
     const val TOP = 0.23f
     const val RIGHT = 0.80f
     const val BOTTOM = 0.63f
+
+    /** The TV screen in pixels on a display of this size (the wallpaper is drawn with ContentScale.Crop). */
+    fun bounds(screenW: Int, screenH: Int): android.graphics.Rect {
+        val scale = max(screenW / WALLPAPER_W, screenH / WALLPAPER_H)
+        val dx = (screenW - WALLPAPER_W * scale) / 2f
+        val dy = (screenH - WALLPAPER_H * scale) / 2f
+        return android.graphics.Rect(
+            (dx + WALLPAPER_W * scale * LEFT).roundToInt(),
+            (dy + WALLPAPER_H * scale * TOP).roundToInt(),
+            (dx + WALLPAPER_W * scale * RIGHT).roundToInt(),
+            (dy + WALLPAPER_H * scale * BOTTOM).roundToInt(),
+        )
+    }
 }
 
-/** Synced lyrics of the song that is playing, drawn on the TV screen of the sky wallpaper. */
+/** One lyric line: the line that is being sung is big and bright and bounces in, the others are small and dim. */
+@Composable
+private fun LyricRow(text: String, active: Boolean) {
+    // Low damping = a little overshoot, so the line "pops" when it becomes the current one.
+    val scale by animateFloatAsState(
+        if (active) 1f else 0.78f, spring(dampingRatio = 0.42f, stiffness = 340f), label = "lyricScale",
+    )
+    val fade by animateFloatAsState(if (active) 1f else 0.32f, tween(350), label = "lyricFade")
+    BasicText(
+        text.ifBlank { "\u266A" },
+        style = txt(Color.White, 18.sp, FontWeight.Bold),
+        modifier = Modifier.fillMaxWidth().graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+            alpha = fade
+            transformOrigin = TransformOrigin(0f, 0.5f)
+        },
+    )
+}
+
+/** Synced lyrics of the song that is playing, drawn on the TV screen of the sky wallpaper (Apple Music style). */
 @Composable
 fun TvLyrics(modifier: Modifier = Modifier) {
     var lines by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
@@ -84,52 +129,63 @@ fun TvLyrics(modifier: Modifier = Modifier) {
         if (lines[i].timeMs <= position) index = i else break
     }
 
+    val listState = rememberLazyListState()
+    val target = max(index, 0) + 1 // +1: the list starts with a spacer
+
+    // Keep the current line in the middle of the TV. It glides there with a soft bounce.
+    LaunchedEffect(target, lines) {
+        fun centerDelta(): Float? {
+            val info = listState.layoutInfo
+            val item = info.visibleItemsInfo.firstOrNull { it.index == target } ?: return null
+            return item.offset + item.size / 2f - info.viewportSize.height / 2f
+        }
+        val delta = centerDelta()
+        if (delta != null) {
+            listState.animateScrollBy(delta, spring(dampingRatio = 0.72f, stiffness = 130f))
+        } else {
+            // The line is far away (the song was seeked): jump close, then center it.
+            listState.scrollToItem(target)
+            withFrameNanos { }
+            centerDelta()?.let { listState.scrollBy(it) }
+        }
+    }
+
     BoxWithConstraints(modifier) {
         // The wallpaper is drawn with ContentScale.Crop: work out where the TV ends up on screen.
-        val sw = constraints.maxWidth.toFloat()
-        val sh = constraints.maxHeight.toFloat()
-        val scale = max(sw / TvScreen.WALLPAPER_W, sh / TvScreen.WALLPAPER_H)
-        val dx = (sw - TvScreen.WALLPAPER_W * scale) / 2f
-        val dy = (sh - TvScreen.WALLPAPER_H * scale) / 2f
-        val left = dx + TvScreen.WALLPAPER_W * scale * TvScreen.LEFT
-        val right = dx + TvScreen.WALLPAPER_W * scale * TvScreen.RIGHT
-        val top = dy + TvScreen.WALLPAPER_H * scale * TvScreen.TOP
-        val bottom = dy + TvScreen.WALLPAPER_H * scale * TvScreen.BOTTOM
+        val tv = TvScreen.bounds(constraints.maxWidth, constraints.maxHeight)
         val density = LocalDensity.current
+        val tvHeight = with(density) { tv.height().toDp() }
 
         Box(
             Modifier
-                .offset { IntOffset(left.roundToInt(), top.roundToInt()) }
-                .size(with(density) { (right - left).toDp() }, with(density) { (bottom - top).toDp() })
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            contentAlignment = Alignment.Center,
+                .offset { IntOffset(tv.left, tv.top) }
+                .size(with(density) { tv.width().toDp() }, tvHeight)
+                .padding(horizontal = 18.dp),
         ) {
-            Crossfade(index, animationSpec = tween(350), label = "lyrics") { i ->
-                Column(
-                    Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    val previous = lines.getOrNull(i - 1)?.text.orEmpty()
-                    val current = lines.getOrNull(i)?.text.orEmpty().ifBlank { "\u266A" }
-                    val next = lines.getOrNull(i + 1)?.text.orEmpty()
-                    val center = TextAlign.Center
-                    BasicText(
-                        previous,
-                        style = txt(Color.White.copy(alpha = 0.40f), 11.sp).copy(textAlign = center),
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
-                    BasicText(
-                        current,
-                        style = txt(Color.White, 17.sp, FontWeight.SemiBold).copy(textAlign = center),
-                        maxLines = 3, overflow = TextOverflow.Ellipsis,
-                    )
-                    BasicText(
-                        next,
-                        style = txt(Color.White.copy(alpha = 0.40f), 11.sp).copy(textAlign = center),
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
+            LazyColumn(
+                state = listState,
+                userScrollEnabled = false,
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    // Lines fade out toward the top and bottom edge of the TV.
+                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                    .drawWithContent {
+                        drawContent()
+                        drawRect(
+                            Brush.verticalGradient(
+                                0f to Color.Transparent, 0.20f to Color.Black,
+                                0.80f to Color.Black, 1f to Color.Transparent,
+                            ),
+                            blendMode = BlendMode.DstIn,
+                        )
+                    },
+            ) {
+                item(key = "top") { Spacer(Modifier.height(tvHeight / 2)) }
+                itemsIndexed(lines, key = { i, _ -> i }) { i, line ->
+                    LyricRow(line.text, active = i == index)
                 }
+                item(key = "bottom") { Spacer(Modifier.height(tvHeight / 2)) }
             }
         }
     }
