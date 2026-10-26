@@ -133,8 +133,8 @@ fun HomeScreen(
     // Leaving the top row also leaves the card.
     LaunchedEffect(state.mode) { if (state.mode != Mode.Top) mediaFocus = -1 }
     // The card disappeared while it was selected: go back to the apps.
-    LaunchedEffect(NowPlaying.active) {
-        if (!NowPlaying.active && mediaFocus >= 0) {
+    LaunchedEffect(cardShown) {
+        if (!cardShown && mediaFocus >= 0) {
             mediaFocus = -1
             state.mode = Mode.Browse
         }
@@ -144,6 +144,9 @@ fun HomeScreen(
     LaunchedEffect(apps.size) {
         if (apps.isNotEmpty() && state.focus > apps.lastIndex) state.focus = apps.lastIndex
     }
+
+    // The Control Center switches: music card (and its remote control) on or off.
+    val cardShown = NowPlaying.active && Features.music
 
     val row = state.row
     val scrollTarget = if (row == 0) 0f else (Metrics.TopRowY + Metrics.Pitch * row - Metrics.GridRowY).value
@@ -188,7 +191,7 @@ fun HomeScreen(
             }
             Mode.Top -> when {
                 // Down from the top buttons: the now playing card if it is showing, otherwise the apps.
-                dy > 0 -> if (NowPlaying.active) mediaFocus = 1 else state.mode = Mode.Browse
+                dy > 0 -> if (cardShown) mediaFocus = 1 else state.mode = Mode.Browse
                 dx != 0 -> state.topIndex = (state.topIndex + dx).coerceIn(0, top.lastIndex)
             }
             Mode.Jiggle -> HomeState.target(state.focus, dx, dy, apps.size)?.let {
@@ -364,7 +367,7 @@ fun HomeScreen(
         val headerAlpha by animateFloatAsState(if (row == 0) 1f else 0f, tween(300), label = "header")
         if (headerAlpha > 0f) {
             // Lyrics of the song that is playing, on the TV screen of the sky wallpaper.
-            if (tvWallpaper) {
+            if (tvWallpaper && Features.lyrics) {
                 TvLyrics(Modifier.fillMaxSize().graphicsLayer { alpha = headerAlpha })
             }
 
@@ -387,11 +390,13 @@ fun HomeScreen(
                         WeatherWidget(weather)
                     }
                 }
-                VerseText(
-                    backdrop, Modifier.padding(top = 8.dp),
-                    maxWidth = if (tvWallpaper) maxOf(160.dp, tvLeft - Metrics.Margin - 14.dp) else 420.dp,
-                )
-                if (tvWallpaper && state.mode != Mode.Control) {
+                if (Features.verse) {
+                    VerseText(
+                        backdrop, Modifier.padding(top = 8.dp),
+                        maxWidth = if (tvWallpaper) maxOf(160.dp, tvLeft - Metrics.Margin - 14.dp) else 420.dp,
+                    )
+                }
+                if (tvWallpaper && state.mode != Mode.Control && Features.music) {
                     FitScale(Modifier.weight(1f).padding(top = 10.dp)) {
                         NowPlayingCard(backdrop, mediaFocus, Modifier)
                     }
@@ -405,7 +410,7 @@ fun HomeScreen(
                 )
                 // Now playing: visible while a music app is running (playing or paused).
                 // With the sky wallpaper it sits under the verse instead (see above).
-                if (!tvWallpaper) {
+                if (!tvWallpaper && Features.music) {
                     NowPlayingCard(
                         backdrop, mediaFocus,
                         Modifier.align(Alignment.TopEnd).padding(top = 84.dp, end = Metrics.Margin).graphicsLayer { alpha = headerAlpha },
@@ -488,6 +493,7 @@ fun HomeScreen(
             }
         }
         cc.PasswordLayer(backdrop) { focusRequester.requestFocus() }
+
     }
 
 }
