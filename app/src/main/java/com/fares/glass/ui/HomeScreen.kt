@@ -31,6 +31,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -147,8 +148,19 @@ fun HomeScreen(
         if (apps.isNotEmpty() && state.focus > apps.lastIndex) state.focus = apps.lastIndex
     }
 
+    // The dock sits low enough that the second row of apps stays below the bottom edge of the screen.
+    var screenHeightDp by remember { mutableFloatStateOf(540f) }
+    val dockDrop = run {
+        val rowOneTop = Metrics.TopRowY.value + Metrics.Pitch.value
+        val dockBottom = Metrics.TopRowY.value - DockTop.value + DockHeight.value
+        val room = screenHeightDp - 12f - dockBottom   // how far the dock can go down and still fit on screen
+        val wanted = screenHeightDp - rowOneTop + 4f   // how far it must go to hide the second row
+        wanted.coerceIn(0f, room.coerceAtLeast(0f))
+    }.dp
+    val topRowY = Metrics.TopRowY + dockDrop
+
     val row = state.row
-    val scrollTarget = if (row == 0) 0f else (Metrics.TopRowY + Metrics.Pitch * row - Metrics.GridRowY).value
+    val scrollTarget = if (row == 0) 0f else (topRowY + Metrics.Pitch * row - Metrics.GridRowY).value
     val scroll = animateFloatAsState(scrollTarget, spring(dampingRatio = 1f, stiffness = 210f), label = "scroll")
     val inGrid = row > 0 || state.mode == Mode.Control
     val blur by animateFloatAsState(if (inGrid) 1f else 0f, tween(450), label = "blur")
@@ -164,7 +176,7 @@ fun HomeScreen(
     val top = topItems()
 
     fun tileX(i: Int) = Metrics.Margin + (Metrics.TileW + Metrics.Gap) * (i % Metrics.COLS)
-    fun tileY(i: Int) = (Metrics.TopRowY + Metrics.Pitch * (i / Metrics.COLS)).value - scrollTarget
+    fun tileY(i: Int) = (topRowY + Metrics.Pitch * (i / Metrics.COLS)).value - scrollTarget
 
     fun launchFocused() {
         val entry = focused ?: return
@@ -333,7 +345,10 @@ fun HomeScreen(
         Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .onSizeChanged { backdrop.screen = it }
+            .onSizeChanged {
+                backdrop.screen = it
+                screenHeightDp = with(density) { it.height.toDp().value }
+            }
             .focusRequester(focusRequester)
             .focusable()
             .onPreviewKeyEvent(::onKey),
@@ -374,7 +389,7 @@ fun HomeScreen(
 
             // On the sky wallpaper the left column must stay left of the TV and above the dock.
             val tvLeft = (TvScreen.LEFT * 960f).dp
-            val columnHeight = maxOf(0.dp, Metrics.TopRowY - DockTop - HeaderTop - 10.dp)
+            val columnHeight = maxOf(0.dp, topRowY - DockTop - HeaderTop - 10.dp)
 
             // Header (greeting, clock, date) with the weather text right next to it,
             // the verse of the moment under the date, and (sky wallpaper) the now playing card under the verse.
@@ -423,7 +438,7 @@ fun HomeScreen(
             Glass(
                 backdrop,
                 Modifier
-                    .offset { IntOffset((Metrics.Margin - DockInset).roundToPx(), (Metrics.TopRowY - DockTop - scroll.value.dp).roundToPx()) }
+                    .offset { IntOffset((Metrics.Margin - DockInset).roundToPx(), (topRowY - DockTop - scroll.value.dp).roundToPx()) }
                     .size(960.dp - (Metrics.Margin - DockInset) * 2, DockHeight)
                     .graphicsLayer { alpha = dockAlpha },
                 shape = RoundedCornerShape(36.dp),
@@ -439,7 +454,7 @@ fun HomeScreen(
                 // When an app is moved or hidden, the others slide to their new place.
                 val slide = spring<Float>(dampingRatio = 0.85f, stiffness = 320f)
                 val x by animateFloatAsState(tileX(i).value, slide, label = "x")
-                val baseY by animateFloatAsState((Metrics.TopRowY + Metrics.Pitch * (i / Metrics.COLS)).value, slide, label = "y")
+                val baseY by animateFloatAsState((topRowY + Metrics.Pitch * (i / Metrics.COLS)).value, slide, label = "y")
                 AppTile(
                     entry = entry,
                     visual = repo.visuals[entry.pkg],
