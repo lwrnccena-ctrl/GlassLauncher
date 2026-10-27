@@ -14,6 +14,8 @@ object Features {
         private set
     var lyrics by mutableStateOf(true)
         private set
+    var weather by mutableStateOf(true)
+        private set
 
     private var prefs: SharedPreferences? = null
 
@@ -25,6 +27,7 @@ object Features {
         verse = p.getBoolean("verse", true)
         music = p.getBoolean("music", true)
         lyrics = p.getBoolean("lyrics", true)
+        weather = p.getBoolean("weather", true)
     }
 
     fun toggleVerse() {
@@ -40,5 +43,10 @@ object Features {
     fun toggleLyrics() {
         lyrics = !lyrics
         prefs?.edit()?.putBoolean("lyrics", lyrics)?.apply()
+    }
+
+    fun toggleWeather() {
+        weather = !weather
+        prefs?.edit()?.putBoolean("weather", weather)?.apply()
     }
 }
