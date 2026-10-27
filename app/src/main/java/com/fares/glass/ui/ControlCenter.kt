@@ -63,6 +63,7 @@ import androidx.compose.material.icons.rounded.Tv
 import androidx.compose.material.icons.rounded.ViewCarousel
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.Wallpaper
+import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.runtime.Composable
@@ -124,11 +125,12 @@ private val Purple = Color(0xFFBF5AF2)
 
 /**
  * Selection numbers on the main page:
- * 0-5 module tiles, 6-8 on/off switches (verse, music, lyrics), 9 System module, 10+ round shortcuts.
+ * 0-5 module tiles, 6-9 on/off switches (verse, music, lyrics, weather), 10 System module, 11+ round shortcuts.
  */
 private const val FIRST_SWITCH = 6
-private const val SYSTEM = 9
-private const val FIRST_SHORTCUT = 10
+private const val SWITCHES = 4
+private const val SYSTEM = FIRST_SWITCH + SWITCHES
+private const val FIRST_SHORTCUT = SYSTEM + 1
 
 /** One row of a detail page (Wi-Fi, Bluetooth). */
 private sealed interface Line {
@@ -283,6 +285,7 @@ class ControlCenter(
             FIRST_SWITCH -> Features.toggleVerse()
             FIRST_SWITCH + 1 -> Features.toggleMusic()
             FIRST_SWITCH + 2 -> Features.toggleLyrics()
+            FIRST_SWITCH + 3 -> Features.toggleWeather()
             SYSTEM -> open(if (settings.available(Section.About)) Section.About else Section.All)
             else -> open(shortcuts[index - FIRST_SHORTCUT])
         }
@@ -294,19 +297,19 @@ class ControlCenter(
             i < FIRST_SWITCH -> when {
                 dx < 0 && i % 2 == 1 -> i - 1
                 dx > 0 && i % 2 == 0 -> i + 1
-                // Down from the last row of tiles: the switch under it (left tile -> verse, right tile -> lyrics).
+                // Down from the last row of tiles: the switch under it (left tile -> verse, right tile -> weather).
                 dy > 0 -> when {
                     i < 4 -> i + 2
                     i == 4 -> FIRST_SWITCH
-                    else -> FIRST_SWITCH + 2
+                    else -> FIRST_SWITCH + SWITCHES - 1
                 }
                 dy < 0 && i >= 2 -> i - 2
                 else -> i
             }
             i < SYSTEM -> when {
                 dx < 0 && i > FIRST_SWITCH -> i - 1
-                dx > 0 && i < FIRST_SWITCH + 2 -> i + 1
-                dy < 0 -> if (i == FIRST_SWITCH + 2) 5 else 4
+                dx > 0 && i < SYSTEM - 1 -> i + 1
+                dy < 0 -> if (i >= FIRST_SWITCH + SWITCHES / 2) 5 else 4
                 dy > 0 -> SYSTEM
                 else -> i
             }
@@ -498,10 +501,11 @@ class ControlCenter(
                 Spacer(Modifier.height(8.dp))
             }
             // On/off switches: Bible verse, music card (playback control) and lyrics.
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 SwitchTile(Icons.Rounded.MenuBook, "Verse", Features.verse, index == FIRST_SWITCH, Modifier.weight(1f))
                 SwitchTile(Icons.Rounded.MusicNote, "Music", Features.music, index == FIRST_SWITCH + 1, Modifier.weight(1f))
                 SwitchTile(Icons.Rounded.Subtitles, "Lyrics", Features.lyrics, index == FIRST_SWITCH + 2, Modifier.weight(1f))
+                SwitchTile(Icons.Rounded.WbSunny, "Weather", Features.weather, index == FIRST_SWITCH + 3, Modifier.weight(1f))
             }
             Spacer(Modifier.height(8.dp))
             SystemModule(index == SYSTEM)
@@ -550,33 +554,35 @@ class ControlCenter(
         }
     }
 
-    /** Small on/off tile: the icon turns green when the feature is on. */
+    /** Small on/off tile: the icon turns green when the feature is on, grey when it is off. */
     @Composable
     private fun SwitchTile(icon: ImageVector, title: String, on: Boolean, focused: Boolean, modifier: Modifier) {
         val f = focusAmount(focused)
         val fg = lerp(White, Ink, f)
-        Row(
+        Column(
             modifier
-                .height(42.dp)
+                .height(44.dp)
                 .graphicsLayer { scaleX = 1f + 0.06f * f; scaleY = 1f + 0.06f * f }
-                .background(lerp(White.copy(alpha = 0.10f), White.copy(alpha = 0.95f), f), RoundedCornerShape(21.dp))
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .background(lerp(White.copy(alpha = 0.10f), White.copy(alpha = 0.95f), f), RoundedCornerShape(18.dp))
+                .padding(horizontal = 4.dp, vertical = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
         ) {
             Box(
-                Modifier.size(22.dp).clip(CircleShape).background(
+                Modifier.size(20.dp).clip(CircleShape).background(
                     if (on) Green else lerp(White.copy(alpha = 0.16f), Ink.copy(alpha = 0.08f), f),
                 ),
                 contentAlignment = Alignment.Center,
             ) {
-                Image(rememberVectorPainter(icon), null, Modifier.size(13.dp),
+                Image(rememberVectorPainter(icon), null, Modifier.size(12.dp),
                     colorFilter = ColorFilter.tint(if (on) White else fg))
             }
-            Spacer(Modifier.width(6.dp))
-            Column {
-                BasicText(title, style = txt(fg, 11.sp, FontWeight.SemiBold), maxLines = 1)
-                BasicText(if (on) "On" else "Off", style = txt(fg.copy(alpha = 0.6f), 10.sp, FontWeight.Medium), maxLines = 1)
-            }
+            Spacer(Modifier.height(2.dp))
+            BasicText(
+                title,
+                style = txt(if (on) fg else fg.copy(alpha = 0.55f), 10.sp, FontWeight.SemiBold),
+                maxLines = 1,
+            )
         }
     }
 
