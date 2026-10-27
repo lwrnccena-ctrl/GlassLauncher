@@ -1,5 +1,6 @@
 package com.fares.glass.ui
 
+import android.os.Build
 import android.os.SystemClock
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -29,11 +30,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
@@ -77,15 +82,25 @@ object TvScreen {
 
 /** One lyric line: the line that is being sung is big and bright and bounces in, the others are small and dim. */
 @Composable
-private fun LyricRow(text: String, active: Boolean) {
+private fun LyricRow(text: String, active: Boolean, blurAmount: Float) {
     // Low damping = a little overshoot, so the line "pops" when it becomes the current one.
     val scale by animateFloatAsState(
         if (active) 1f else 0.78f, spring(dampingRatio = 0.42f, stiffness = 340f), label = "lyricScale",
     )
     val fade by animateFloatAsState(if (active) 1f else 0.32f, tween(350), label = "lyricFade")
+    // Android 12+ blurs the whole list (see TvLyrics). On older Android (the TV runs 11) the text is
+    // faded out while a soft glow of the same text takes its place, which looks like a blur.
+    val glowRadius = with(LocalDensity.current) { 9.dp.toPx() } * blurAmount
+    val style = if (Build.VERSION.SDK_INT >= 31 || blurAmount < 0.01f) {
+        txt(Color.White, 18.sp, FontWeight.Bold)
+    } else {
+        txt(Color.White.copy(alpha = 1f - blurAmount), 18.sp, FontWeight.Bold).copy(
+            shadow = Shadow(Color.White.copy(alpha = 0.85f * blurAmount), Offset.Zero, glowRadius),
+        )
+    }
     BasicText(
         text.ifBlank { "\u266A" },
-        style = txt(Color.White, 18.sp, FontWeight.Bold),
+        style = style,
         modifier = Modifier.fillMaxWidth().graphicsLayer {
             scaleX = scale
             scaleY = scale
@@ -97,7 +112,7 @@ private fun LyricRow(text: String, active: Boolean) {
 
 /** Synced lyrics of the song that is playing, drawn on the TV screen of the sky wallpaper (Apple Music style). */
 @Composable
-fun TvLyrics(modifier: Modifier = Modifier) {
+fun TvLyrics(modifier: Modifier = Modifier, blurAmount: Float = 0f) {
     var lines by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
 
@@ -160,6 +175,13 @@ fun TvLyrics(modifier: Modifier = Modifier) {
             Modifier
                 .offset { IntOffset(tv.left, tv.top) }
                 .size(with(density) { tv.width().toDp() }, tvHeight)
+                // Behind the Control Center the lyrics blur and dim like the wallpaper (blur: Android 12+).
+                .then(
+                    if (Build.VERSION.SDK_INT >= 31 && blurAmount > 0.01f) {
+                        Modifier.blur(14.dp * blurAmount, BlurredEdgeTreatment.Unbounded)
+                    } else Modifier,
+                )
+                .graphicsLayer { alpha = 1f - 0.3f * blurAmount }
                 .padding(horizontal = 18.dp),
         ) {
             LazyColumn(
@@ -183,7 +205,7 @@ fun TvLyrics(modifier: Modifier = Modifier) {
             ) {
                 item(key = "top") { Spacer(Modifier.height(tvHeight / 2)) }
                 itemsIndexed(lines, key = { i, _ -> i }) { i, line ->
-                    LyricRow(line.text, active = i == index)
+                    LyricRow(line.text, active = i == index, blurAmount = blurAmount)
                 }
                 item(key = "bottom") { Spacer(Modifier.height(tvHeight / 2)) }
             }
