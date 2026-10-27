@@ -369,7 +369,7 @@ fun HomeScreen(
         if (headerAlpha > 0f) {
             // Lyrics of the song that is playing, on the TV screen of the sky wallpaper.
             if (tvWallpaper && Features.lyrics) {
-                TvLyrics(Modifier.fillMaxSize().graphicsLayer { alpha = headerAlpha })
+                TvLyrics(Modifier.fillMaxSize().graphicsLayer { alpha = headerAlpha }, blurAmount = blur)
             }
 
             // On the sky wallpaper the left column must stay left of the TV and above the dock.
