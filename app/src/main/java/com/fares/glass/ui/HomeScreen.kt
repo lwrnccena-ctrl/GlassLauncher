@@ -176,13 +176,22 @@ fun HomeScreen(
         onLaunch(entry, r)
     }
 
+    /** True if the app is in one of the columns right under the now playing card. */
+    fun underCard(i: Int): Boolean {
+        val col = i % Metrics.COLS
+        // Sky wallpaper: the card is at the left, under the verse. Other wallpapers: top right.
+        return if (tvWallpaper) col <= 1 else col >= Metrics.COLS - 2
+    }
+
     fun move(dx: Int, dy: Int) {
         when (state.mode) {
             Mode.Browse -> {
                 if (dy < 0 && row == 0) {
-                    // Above the dock: the glass buttons at the top right.
+                    // Above the dock: the glass buttons at the top right, or straight to the now playing
+                    // card when the selected app is right under it (play/pause is selected first).
                     state.topIndex = top.lastIndex
                     state.mode = Mode.Top
+                    if (cardShown && underCard(state.focus)) mediaFocus = 1
                     return
                 }
                 HomeState.target(state.focus, dx, dy, apps.size)?.let { state.focus = it }
@@ -384,7 +393,7 @@ fun HomeScreen(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     HomeHeader(repo.userName, Modifier)
-                    if (weather != null) {
+                    if (weather != null && Features.weather) {
                         Spacer(Modifier.width(28.dp))
                         WeatherWidget(weather)
                     }
