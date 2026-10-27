@@ -7,15 +7,18 @@ import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
+
+/** Set to true to bring the idle screensaver back. */
+private const val ENABLE_IDLE_SAVER = false
 
 /** How long with no remote press before the screensaver starts over another app (5 minutes). */
 private const val IDLE_MS = 5 * 60_000L
 
 class HomeAccessibilityService : AccessibilityService() {
 
-    // Stock launchers to take over from. Add the ones you encounter.
     private val stockLaunchers = setOf(
         "com.google.android.tvlauncher",
         "com.google.android.apps.tv.launcherx",
@@ -24,15 +27,22 @@ class HomeAccessibilityService : AccessibilityService() {
         "com.android.tv.launcher"
     )
 
-    // Music apps: the screensaver may start even while they are playing sound.
-    // Add more package names here.
+    // While one of these is on screen, ignore stock launcher refreshes
+    private val settingsPackages = setOf(
+        "com.android.tv.settings",
+        "com.android.settings",
+        "com.google.android.tvsettings",
+        "com.android.captiveportallogin",
+        "com.google.android.captiveportallogin",
+        "com.android.networkstack"
+    )
+
     private val musicApps = setOf(
         "com.spotify.tv.android",
         "com.google.android.youtube.tvmusic",
         "com.apple.android.music"
     )
 
-    // Windows that appear on top of apps and don't count as "the app".
     private val ignoredPackages = setOf("com.android.systemui", "android")
 
     private val handler = Handler(Looper.getMainLooper())
@@ -52,7 +62,7 @@ class HomeAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         lastInput = SystemClock.elapsedRealtime()
         handler.removeCallbacks(idleCheck)
-        handler.postDelayed(idleCheck, 5_000L)
+        if (ENABLE_IDLE_SAVER) handler.postDelayed(idleCheck, 5_000L)
     }
 
     override fun onDestroy() {
@@ -61,22 +71,24 @@ class HomeAccessibilityService : AccessibilityService() {
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
-        // Any remote press counts as activity.
         lastInput = SystemClock.elapsedRealtime()
         saverStarted = false
 
         if (event.keyCode != KeyEvent.KEYCODE_HOME) return false
-        // Let long-press through (system menu / recents)
         if (event.action == KeyEvent.ACTION_UP && event.eventTime - event.downTime < 500) {
             launchGlass(screensaver = false)
         }
-        return true // consume Home so the stock launcher never gets it
+        return true
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
+        Log.d("GlassHome", "window: $pkg (foreground=$foregroundPkg)")
+
         if (pkg in stockLaunchers) {
+            // Ignore launcher refreshes (e.g. after joining Wi-Fi) while in Settings
+            if (foregroundPkg in settingsPackages) return
             launchGlass(screensaver = false)
             return
         }
@@ -85,11 +97,9 @@ class HomeAccessibilityService : AccessibilityService() {
 
     private fun checkIdle() {
         if (saverStarted) return
-        // Glass shows its own screensaver when it is the app on screen.
         if (foregroundPkg.isEmpty() || foregroundPkg == packageName) return
         if (SystemClock.elapsedRealtime() - lastInput < IDLE_MS) return
 
-        // Sound playing usually means someone is watching something, except in music apps.
         val audio = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         if (audio.isMusicActive && foregroundPkg !in musicApps) return
 
@@ -98,7 +108,6 @@ class HomeAccessibilityService : AccessibilityService() {
     }
 
     private fun launchGlass(screensaver: Boolean) {
-        // Debounce: both mechanisms can fire for the same press
         val now = SystemClock.elapsedRealtime()
         if (now - lastLaunch < 600) return
         lastLaunch = now
