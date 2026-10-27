@@ -28,6 +28,9 @@
     <!-- Animation speed: `adb shell pm grant com.fares.glass android.permission.WRITE_SECURE_SETTINGS` -->
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
         xmlns:tools="http://schemas.android.com/tools" tools:ignore="ProtectedPermissions" />
+    <!-- Brightness slider in the Control Center: `adb shell appops set com.fares.glass WRITE_SETTINGS allow` -->
+    <uses-permission android:name="android.permission.WRITE_SETTINGS"
+        xmlns:tools="http://schemas.android.com/tools" tools:ignore="ProtectedPermissions" />
 
     <queries>
         <intent>
