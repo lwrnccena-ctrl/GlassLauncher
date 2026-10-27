@@ -127,6 +127,15 @@ class MainActivity : ComponentActivity() {
                 delay(if (ok) 10 * 60_000L else 30_000L)
             }
         }
+
+        // Check the time of day every minute, so the sky wallpaper switches close to the exact moment
+        // (the weather itself is only refreshed every 10 minutes).
+        lifecycleScope.launch {
+            while (true) {
+                delay(60_000L)
+                if (isAutoSelected()) applySky(force = false)
+            }
+        }
     }
 
     override fun onResume() {
@@ -187,12 +196,12 @@ class MainActivity : ComponentActivity() {
             System.currentTimeMillis(), w?.sunrise ?: fallbackRise, w?.sunset ?: fallbackSet,
         )
         val rain = w?.isRaining == true
-        raining.value = rain
         wallpaperName.value = "Auto (sky & weather)"
 
         val key = "$phase-$rain"
         if (!force && key == skyKey) return
         skyKey = key
+        raining.value = rain
 
         lifecycleScope.launch {
             val (sharp, frosted) = withContext(Dispatchers.Default) {
@@ -239,8 +248,13 @@ class MainActivity : ComponentActivity() {
 
     // ---- Launching ----
 
-    private fun launch(entry: AppEntry, from: Rect) {
-        val options = ActivityOptions.makeScaleUpAnimation(window.decorView, from.left, from.top, from.width(), from.height())
+    /** from = where the system animation starts; null = no system animation (the launcher drew its own). */
+    private fun launch(entry: AppEntry, from: Rect?) {
+        val options = if (from != null) {
+            ActivityOptions.makeScaleUpAnimation(window.decorView, from.left, from.top, from.width(), from.height())
+        } else {
+            ActivityOptions.makeCustomAnimation(this, 0, 0)
+        }
         try {
             startActivity(entry.launchIntent(), options.toBundle())
         } catch (e: Exception) {
