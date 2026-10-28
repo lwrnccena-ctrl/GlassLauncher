@@ -35,17 +35,23 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -130,13 +136,29 @@ fun HomeScreen(
     val focusRequester = remember { FocusRequester() }
     // Selected button on the now playing card: -1 = none, 0 = previous, 1 = play/pause, 2 = next.
     var mediaFocus by remember { mutableIntStateOf(-1) }
+    // Top buttons (icons only): 0 Wi-Fi, 1 Bluetooth, 2 TV input, 3 Settings.
+    val topCount = 4
+    // Up from the top buttons selects the greeting; OK then lets you type the name that follows it.
+    var nameFocus by remember { mutableStateOf(false) }
+    var editingName by remember { mutableStateOf(false) }
+    // TV input picker (HDMI 1, HDMI 2...) under the top buttons.
+    var inputOpen by remember { mutableStateOf(false) }
+    var inputIndex by remember { mutableIntStateOf(0) }
+    var inputs by remember { mutableStateOf<List<InputSources.Source>>(emptyList()) }
     // The Control Center switch for the music card (and its remote control).
     val cardShown = NowPlaying.active && Features.music
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
     // Lets the now playing card see which media is playing.
     LaunchedEffect(Unit) { NowPlaying.ensureListener(context) }
     // Leaving the top row also leaves the card.
-    LaunchedEffect(state.mode) { if (state.mode != Mode.Top) mediaFocus = -1 }
+    LaunchedEffect(state.mode) {
+        if (state.mode != Mode.Top) {
+            mediaFocus = -1
+            nameFocus = false
+        }
+    }
+    // The name keyboard was closed: the remote drives the home screen again.
+    LaunchedEffect(editingName) { if (!editingName) focusRequester.requestFocus() }
     // The card disappeared while it was selected: go back to the apps.
     LaunchedEffect(cardShown) {
         if (!cardShown && mediaFocus >= 0) {
@@ -186,7 +208,6 @@ fun HomeScreen(
     } else null
 
     val menu = menuItems()
-    val top = topItems()
 
     fun tileX(i: Int) = Metrics.Margin + (Metrics.TileW + Metrics.Gap) * (i % Metrics.COLS)
     fun tileY(i: Int) = (topRowY + Metrics.Pitch * (i / Metrics.COLS)).value - scrollTarget
@@ -207,7 +228,7 @@ fun HomeScreen(
                 if (dy < 0 && row == 0) {
                     // Above the dock: the now playing card if it is showing (play/pause is selected first),
                     // from any app in the row. Up again goes on to the glass buttons at the top right.
-                    state.topIndex = top.lastIndex
+                    state.topIndex = topCount - 1
                     state.mode = Mode.Top
                     if (cardShown) mediaFocus = 1
                     return
@@ -216,9 +237,13 @@ fun HomeScreen(
                 state.bump(dx, dy)
             }
             Mode.Top -> when {
+                // The greeting is selected: Down goes back to the top buttons.
+                nameFocus -> if (dy > 0) nameFocus = false
+                // Up from the top buttons: the greeting (and its name).
+                dy < 0 -> nameFocus = true
                 // Down from the top buttons: the now playing card if it is showing, otherwise the apps.
                 dy > 0 -> if (cardShown) mediaFocus = 1 else state.mode = Mode.Browse
-                dx != 0 -> state.topIndex = (state.topIndex + dx).coerceIn(0, top.lastIndex)
+                dx != 0 -> state.topIndex = (state.topIndex + dx).coerceIn(0, topCount - 1)
             }
             Mode.Jiggle -> HomeState.target(state.focus, dx, dy, apps.size)?.let {
                 repo.move(state.focus, it)
@@ -232,10 +257,19 @@ fun HomeScreen(
     fun select() {
         when (state.mode) {
             Mode.Browse -> launchFocused()
-            Mode.Top -> {
-                // The top buttons open the Control Center straight on the matching page.
-                cc.open(when (state.topIndex) { 0 -> CcPage.Wifi; 1 -> CcPage.Bluetooth; else -> CcPage.Main })
-                state.mode = Mode.Control
+            Mode.Top -> when {
+                nameFocus -> editingName = true
+                state.topIndex == 2 -> {
+                    // TV input: a short list of the TV's inputs.
+                    inputs = InputSources.list(context)
+                    inputIndex = 0
+                    inputOpen = true
+                }
+                else -> {
+                    // The other buttons open the Control Center straight on the matching page.
+                    cc.open(when (state.topIndex) { 0 -> CcPage.Wifi; 1 -> CcPage.Bluetooth; else -> CcPage.Main })
+                    state.mode = Mode.Control
+                }
             }
             Mode.Jiggle -> {
                 repo.saveOrder()
@@ -316,9 +350,38 @@ fun HomeScreen(
         return true
     }
 
+    /** Keys while the list of TV inputs is showing. */
+    fun inputKey(e: AndroidKey): Boolean {
+        val down = e.action == AndroidKey.ACTION_DOWN
+        val first = down && e.repeatCount == 0
+        when (e.keyCode) {
+            AndroidKey.KEYCODE_DPAD_UP -> if (down) inputIndex = (inputIndex - 1).coerceAtLeast(0)
+            AndroidKey.KEYCODE_DPAD_DOWN ->
+                if (down) inputIndex = (inputIndex + 1).coerceAtMost((inputs.size - 1).coerceAtLeast(0))
+            AndroidKey.KEYCODE_DPAD_CENTER, AndroidKey.KEYCODE_ENTER, AndroidKey.KEYCODE_NUMPAD_ENTER,
+            AndroidKey.KEYCODE_BUTTON_A -> if (first) {
+                val source = inputs.getOrNull(inputIndex)
+                inputOpen = false
+                if (source != null) InputSources.open(context, source)
+            }
+            AndroidKey.KEYCODE_DPAD_LEFT, AndroidKey.KEYCODE_DPAD_RIGHT, AndroidKey.KEYCODE_BACK,
+            AndroidKey.KEYCODE_MENU -> if (first) inputOpen = false
+        }
+        return true
+    }
+
     fun onKey(event: KeyEvent): Boolean {
         val e = event.nativeKeyEvent
         if (Recents.open) return recentsKey(e)
+        if (editingName) {
+            // The text field and the on-screen keyboard handle the keys; Back cancels.
+            if (e.keyCode == AndroidKey.KEYCODE_BACK) {
+                if (e.action == AndroidKey.ACTION_UP) editingName = false
+                return true
+            }
+            return false
+        }
+        if (inputOpen) return inputKey(e)
         if (state.mode == Mode.Control) return cc.onKey(e)
         val down = e.action == AndroidKey.ACTION_DOWN
 
@@ -377,7 +440,14 @@ fun HomeScreen(
             AndroidKey.KEYCODE_DPAD_RIGHT -> if (down) move(1, 0)
             AndroidKey.KEYCODE_DPAD_UP -> if (down) move(0, -1)
             AndroidKey.KEYCODE_DPAD_DOWN -> if (down) move(0, 1)
-            AndroidKey.KEYCODE_BACK -> if (down && e.repeatCount == 0) back()
+            AndroidKey.KEYCODE_BACK -> if (down) {
+                if (e.repeatCount == 0) {
+                    back()
+                } else if (state.mode == Mode.Browse && e.eventTime - e.downTime > 700) {
+                    // Holding Back on the home screen opens the recent apps.
+                    Recents.open = true
+                }
+            }
             AndroidKey.KEYCODE_MENU -> if (down && e.repeatCount == 0) menuKey()
             AndroidKey.KEYCODE_APP_SWITCH -> if (down && e.repeatCount == 0) Recents.open = true
             AndroidKey.KEYCODE_MEDIA_PLAY_PAUSE -> if (down) {
@@ -454,7 +524,22 @@ fun HomeScreen(
                     .graphicsLayer { alpha = headerAlpha },
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    HomeHeader(repo.userName, Modifier)
+                    // The greeting is outlined while it is selected (Up from the top buttons).
+                    Box(
+                        Modifier.drawBehind {
+                            if (nameFocus) {
+                                drawRoundRect(
+                                    color = Color.White,
+                                    topLeft = Offset(-10.dp.toPx(), -6.dp.toPx()),
+                                    size = Size(size.width + 20.dp.toPx(), size.height + 12.dp.toPx()),
+                                    cornerRadius = CornerRadius(16.dp.toPx()),
+                                    style = Stroke(2.dp.toPx()),
+                                )
+                            }
+                        },
+                    ) {
+                        HomeHeader(repo.userName, Modifier)
+                    }
                     if (weather != null && Features.weather) {
                         Spacer(Modifier.width(28.dp))
                         WeatherWidget(weather)
@@ -473,9 +558,9 @@ fun HomeScreen(
                 }
             }
             if (state.mode != Mode.Control) {
-                TopBar(
-                    backdrop, top,
-                    if (state.mode == Mode.Top && mediaFocus < 0) state.topIndex else -1,
+                IconBar(
+                    backdrop,
+                    if (state.mode == Mode.Top && mediaFocus < 0 && !nameFocus) state.topIndex else -1,
                     Modifier.align(Alignment.TopEnd).padding(top = 34.dp, end = Metrics.Margin).graphicsLayer { alpha = headerAlpha },
                 )
                 // Now playing: visible while a music app is running (playing or paused).
@@ -578,6 +663,20 @@ fun HomeScreen(
                     nudge = state.nudge,
                     modifier = Modifier,
                 )
+            }
+        }
+        // TV inputs (HDMI 1, HDMI 2...) under the top buttons.
+        if (inputOpen) {
+            InputPicker(
+                backdrop, inputs.map { it.label }, inputIndex,
+                Modifier.align(Alignment.TopEnd).padding(top = 84.dp, end = Metrics.Margin),
+            )
+        }
+        // The name after the greeting.
+        if (editingName) {
+            NameDialog(backdrop, repo.userName) { name ->
+                repo.setName(name)
+                editingName = false
             }
         }
         cc.PasswordLayer(backdrop) { focusRequester.requestFocus() }
