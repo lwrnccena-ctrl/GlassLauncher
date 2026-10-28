@@ -5,20 +5,20 @@ import java.security.KeyPair;
 import java.security.cert.Certificate;
 import java.util.Date;
 
-import sun.security.x509.AlgorithmId;
-import sun.security.x509.CertificateAlgorithmId;
-import sun.security.x509.CertificateSerialNumber;
-import sun.security.x509.CertificateValidity;
-import sun.security.x509.CertificateVersion;
-import sun.security.x509.CertificateX509Key;
-import sun.security.x509.X500Name;
-import sun.security.x509.X509CertImpl;
-import sun.security.x509.X509CertInfo;
+import android.sun.security.x509.AlgorithmId;
+import android.sun.security.x509.CertificateAlgorithmId;
+import android.sun.security.x509.CertificateSerialNumber;
+import android.sun.security.x509.CertificateValidity;
+import android.sun.security.x509.CertificateVersion;
+import android.sun.security.x509.CertificateX509Key;
+import android.sun.security.x509.X500Name;
+import android.sun.security.x509.X509CertImpl;
+import android.sun.security.x509.X509CertInfo;
 
 /**
  * Builds the self-signed ADB certificate. This lives in Java because Kotlin
- * compiles against the desktop JDK, which hides sun.security.x509. Java files
- * are compiled against android.jar, so they see sun-security-android instead.
+ * compiles against the desktop JDK, which hides the JDK-only sun.security.x509. Java files
+ * are compiled against android.jar, and sun-security-android lives in android.sun.security.
  */
 public final class CertUtil {
     private CertUtil() {}
