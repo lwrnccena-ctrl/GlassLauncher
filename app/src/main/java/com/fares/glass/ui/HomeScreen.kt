@@ -2,6 +2,7 @@ package com.fares.glass.ui
 
 import android.app.ActivityManager
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.Build
 import android.view.KeyEvent as AndroidKey
@@ -43,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur as blurEffect
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
@@ -53,8 +55,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.layout.ContentScale
@@ -70,7 +76,11 @@ import com.fares.glass.R
 import com.fares.glass.data.AppEntry
 import com.fares.glass.data.AppRepository
 import com.fares.glass.data.Weather
+import com.fares.glass.gfx.Blur
 import com.fares.glass.sys.NowPlaying
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 sealed interface Command {
@@ -174,7 +184,7 @@ fun HomeScreen(
         if (apps.isNotEmpty() && state.focus > apps.lastIndex) state.focus = apps.lastIndex
     }
 
-    // Recent apps: a stack of cards, opened with a double press of Home or by holding Back.
+    // Recent apps: a cascade of cards, opened with a double press of Home or by holding Back.
     var recentIndex by remember { mutableIntStateOf(0) }
     val recentApps = Recents.list.mapNotNull { pkg -> apps.firstOrNull { it.pkg == pkg } }
     LaunchedEffect(Recents.open) {
@@ -183,6 +193,39 @@ fun HomeScreen(
             mediaFocus = -1
             if (state.mode == Mode.Control) cc.close() else state.mode = Mode.Browse
         }
+    }
+
+    // Blur behind the recent apps.
+    // Android 12+: the whole home screen is blurred live.
+    // Android 7-11 can't do that, so one snapshot of the home screen is taken when recents opens,
+    // blurred once with Glass's own Blur, and faded in on top.
+    val sceneLayer = rememberGraphicsLayer()
+    var frozen by remember { mutableStateOf<ImageBitmap?>(null) }
+    val frozenAlpha by animateFloatAsState(
+        if (Recents.open && frozen != null) 1f else 0f, tween(300), label = "frozen",
+    )
+    LaunchedEffect(Recents.open) {
+        if (Build.VERSION.SDK_INT >= 31) return@LaunchedEffect
+        if (Recents.open) {
+            try {
+                val shot = sceneLayer.toImageBitmap()
+                frozen = withContext(Dispatchers.Default) {
+                    val soft = shot.asAndroidBitmap().copy(Bitmap.Config.ARGB_8888, false)
+                    Blur.frosted(soft, 480, 7f, 1.1f, 1.0f).asImageBitmap()
+                }
+            } catch (ex: Exception) {
+                frozen = null
+            }
+        } else {
+            delay(400)
+            frozen = null
+        }
+    }
+    val recentsMix by animateFloatAsState(if (Recents.open) 1f else 0f, tween(350), label = "recentsMix")
+    val sceneBlur = if (Build.VERSION.SDK_INT >= 31 && recentsMix > 0.01f) {
+        Modifier.blurEffect((24f * recentsMix).dp)
+    } else {
+        Modifier
     }
 
     // The dock sits low enough that the second row of apps stays below the bottom edge of the screen.
@@ -200,16 +243,7 @@ fun HomeScreen(
     val scrollTarget = if (row == 0) 0f else (topRowY + Metrics.Pitch * row - Metrics.GridRowY).value
     val scroll = animateFloatAsState(scrollTarget, spring(dampingRatio = 1f, stiffness = 210f), label = "scroll")
     val inGrid = row > 0 || state.mode == Mode.Control
-    // The frosted wallpaper also fades in while the recent apps are showing.
-    val blur by animateFloatAsState(if (inGrid || Recents.open) 1f else 0f, tween(450), label = "blur")
-    // 0 -> 1 while the recent apps open: drives the blur of the home items.
-    val recentsMix by animateFloatAsState(if (Recents.open) 1f else 0f, tween(350), label = "recentsMix")
-    // Android 12+: a real blur of the home items. Older TVs: the home items just fade (see below).
-    val contentBlur = if (Build.VERSION.SDK_INT >= 31 && recentsMix > 0.01f) {
-        Modifier.blurEffect((24f * recentsMix).dp)
-    } else {
-        Modifier
-    }
+    val blur by animateFloatAsState(if (inGrid) 1f else 0f, tween(450), label = "blur")
     val dim by animateFloatAsState(
         if (state.mode == Mode.Control || state.mode == Mode.Menu) 0.3f else 0f, tween(250), label = "dim",
     )
@@ -488,223 +522,76 @@ fun HomeScreen(
             .focusable()
             .onPreviewKeyEvent(::onKey),
     ) {
-        // Background: sharp at the top of the home screen, blurred and dimmed once you move into the grid.
-        Crossfade(wallpaper, animationSpec = tween(700), label = "wallpaper") { img ->
-            if (img != null) {
-                Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low)
-            }
-        }
-        backdrop.frosted?.let {
-            Image(
-                it, null, Modifier.fillMaxSize().graphicsLayer { alpha = blur },
-                contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low,
-            )
-        }
-        Crossfade(ambience, animationSpec = tween(600), label = "topShelf") { img ->
-            if (img != null) {
-                Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low)
-            }
-        }
-        if (raining) RainOverlay(Modifier.fillMaxSize())
+        // ---- The whole home screen (wallpaper, clock, dock, apps, panels) is one "scene". ----
+        // It is recorded so a snapshot can be taken, and it is blurred while the recent apps are open.
         Box(
-            Modifier.fillMaxSize().background(
-                Brush.verticalGradient(0f to Color.Transparent, 0.45f to Color.Black.copy(alpha = 0.05f), 1f to Color.Black.copy(alpha = 0.5f)),
-            ),
-        )
-        Box(Modifier.fillMaxSize().graphicsLayer { alpha = blur }.background(Color.Black.copy(alpha = 0.22f)))
-
-        // ---- Everything on the home screen (clock, dock, apps, panels). It blurs while recents is open. ----
-        Box(
-            Modifier.fillMaxSize().then(contentBlur).graphicsLayer {
-                // Android 7-11 can't blur live: the home items just fade out instead.
-                alpha = if (Build.VERSION.SDK_INT < 31) 1f - 0.7f * recentsMix else 1f
-            },
+            Modifier
+                .fillMaxSize()
+                .then(sceneBlur)
+                .drawWithContent {
+                    sceneLayer.record { this@drawWithContent.drawContent() }
+                    drawLayer(sceneLayer)
+                },
         ) {
-
-        // Glass dock under the first row; it fades out when you move into the grid.
-        val dockAlpha by animateFloatAsState(if (row == 0) 1f else 0f, tween(300), label = "dock")
-        val headerAlpha by animateFloatAsState(if (row == 0) 1f else 0f, tween(300), label = "header")
-        if (headerAlpha > 0f) {
-            // Lyrics of the song that is playing, on the TV screen of the sky wallpaper.
-            if (tvWallpaper && Features.lyrics) {
-                TvLyrics(Modifier.fillMaxSize().graphicsLayer { alpha = headerAlpha }, blurAmount = blur)
-            }
-
-            // On the sky wallpaper the left column must stay left of the TV and above the dock.
-            val tvLeft = (TvScreen.LEFT * 960f).dp
-            val columnHeight = maxOf(0.dp, topRowY - DockTop - HeaderTop - 10.dp)
-
-            // Header (greeting, clock, date) with the weather text right next to it,
-            // the verse of the moment under the date, and (sky wallpaper) the now playing card under the verse.
-            Column(
-                Modifier
-                    .padding(start = Metrics.Margin, top = HeaderTop)
-                    .then(if (tvWallpaper) Modifier.height(columnHeight) else Modifier)
-                    .graphicsLayer { alpha = headerAlpha },
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // The greeting is outlined while it is selected (Up from the top buttons).
-                    Box(
-                        Modifier.drawBehind {
-                            if (nameFocus) {
-                                drawRoundRect(
-                                    color = Color.White,
-                                    topLeft = Offset(-10.dp.toPx(), -6.dp.toPx()),
-                                    size = Size(size.width + 20.dp.toPx(), size.height + 12.dp.toPx()),
-                                    cornerRadius = CornerRadius(16.dp.toPx()),
-                                    style = Stroke(2.dp.toPx()),
-                                )
-                            }
-                        },
-                    ) {
-                        HomeHeader(repo.userName, Modifier)
-                    }
-                    if (weather != null && Features.weather) {
-                        Spacer(Modifier.width(28.dp))
-                        WeatherWidget(weather)
-                    }
-                }
-                if (Features.verse) {
-                    VerseText(
-                        backdrop, Modifier.padding(top = 8.dp),
-                        maxWidth = if (tvWallpaper) maxOf(160.dp, tvLeft - Metrics.Margin - 14.dp) else 420.dp,
-                    )
-                }
-                if (tvWallpaper && state.mode != Mode.Control && Features.music) {
-                    FitScale(Modifier.weight(1f).padding(top = 10.dp)) {
-                        NowPlayingCard(backdrop, mediaFocus, Modifier)
-                    }
+            // Background: sharp at the top of the home screen, blurred and dimmed once you move into the grid.
+            Crossfade(wallpaper, animationSpec = tween(700), label = "wallpaper") { img ->
+                if (img != null) {
+                    Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low)
                 }
             }
-            if (state.mode != Mode.Control) {
-                IconBar(
-                    backdrop,
-                    if (state.mode == Mode.Top && mediaFocus < 0 && !nameFocus) state.topIndex else -1,
-                    Modifier.align(Alignment.TopEnd).padding(top = 34.dp, end = Metrics.Margin).graphicsLayer { alpha = headerAlpha },
-                )
-                // Now playing: visible while a music app is running (playing or paused).
-                // With the sky wallpaper it sits under the verse instead (see above).
-                if (!tvWallpaper && Features.music) {
-                    NowPlayingCard(
-                        backdrop, mediaFocus,
-                        Modifier.align(Alignment.TopEnd).padding(top = 84.dp, end = Metrics.Margin).graphicsLayer { alpha = headerAlpha },
-                    )
-                }
-            }
-        }
-        if (dockAlpha > 0f) {
-            Glass(
-                backdrop,
-                Modifier
-                    .offset { IntOffset((Metrics.Margin - DockInset).roundToPx(), (topRowY - DockTop - scroll.value.dp).roundToPx()) }
-                    .size(960.dp - (Metrics.Margin - DockInset) * 2, DockHeight)
-                    .graphicsLayer { alpha = dockAlpha },
-                shape = RoundedCornerShape(36.dp),
-                tint = Color.White.copy(alpha = 0.06f),
-                source = ambience,
-            )
-        }
-
-        // Grid: only rows near the selection are composed.
-        val visibleRows = (row - 2)..(row + 3)
-        apps.forEachIndexed { i, entry ->
-            if (i / Metrics.COLS in visibleRows) key(entry.pkg) {
-                // When an app is moved or hidden, the others slide to their new place.
-                val slide = spring<Float>(dampingRatio = 0.85f, stiffness = 320f)
-                val x by animateFloatAsState(tileX(i).value, slide, label = "x")
-                val baseY by animateFloatAsState((topRowY + Metrics.Pitch * (i / Metrics.COLS)).value, slide, label = "y")
-                AppTile(
-                    entry = entry,
-                    visual = repo.visuals[entry.pkg],
-                    focused = i == state.focus && state.mode != Mode.Control && state.mode != Mode.Top,
-                    pressed = i == state.focus && state.pressed,
-                    jiggling = state.mode == Mode.Jiggle && i == state.focus,
-                    showLabel = i >= Metrics.COLS,
-                    nudge = state.nudge,
-                    modifier = Modifier
-                        .offset { IntOffset(x.dp.roundToPx(), (baseY - scroll.value).dp.roundToPx()) }
-                        .graphicsLayer {
-                            // Rows scrolling off the top fade out, as on tvOS.
-                            val y = baseY - scroll.value
-                            alpha = ((y + 60f) / 100f).coerceIn(0f, 1f)
-                        },
+            backdrop.frosted?.let {
+                Image(
+                    it, null, Modifier.fillMaxSize().graphicsLayer { alpha = blur },
+                    contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low,
                 )
             }
-        }
-
-        Box(Modifier.fillMaxSize().graphicsLayer { alpha = dim }.background(Color.Black))
-
-        AnimatedVisibility(
-            state.mode == Mode.Jiggle, Modifier.align(Alignment.TopCenter).padding(top = 32.dp),
-            enter = fadeIn() + scaleIn(initialScale = 0.9f), exit = fadeOut() + scaleOut(targetScale = 0.9f),
-        ) {
-            HintPill(backdrop, stringResource(R.string.hint_move, focused?.label.orEmpty()), Modifier)
-        }
-
-        AnimatedVisibility(
-            state.mode == Mode.Control, Modifier.align(Alignment.TopEnd).padding(top = 12.dp, end = 24.dp),
-            enter = fadeIn(tween(220)) + slideInHorizontally(spring(dampingRatio = 0.85f, stiffness = 420f)) { it / 2 },
-            exit = fadeOut(tween(180)) + slideOutHorizontally(tween(220)) { it / 2 },
-        ) {
-            cc.Panel(backdrop, wallpaperName, Modifier)
-        }
-
-        if (focused != null) {
-            val tx = tileX(state.focus).value
-            val ty = tileY(state.focus)
-            val above = ty - MenuHeight.value - 14f > 16f
-            val mx = (tx + Metrics.TileW.value / 2 - MenuWidth.value / 2)
-                .coerceIn(Metrics.Margin.value, 960f - Metrics.Margin.value - MenuWidth.value)
-            val my = if (above) ty - MenuHeight.value - 14f else ty + Metrics.TileH.value + 40f
-            AnimatedVisibility(
-                state.mode == Mode.Menu, Modifier.offset(mx.dp, my.dp),
-                enter = fadeIn(tween(180)) + scaleIn(
-                    spring(dampingRatio = 0.75f, stiffness = 600f), 0.9f, TransformOrigin(0.5f, if (above) 1f else 0f),
+            Crossfade(ambience, animationSpec = tween(600), label = "topShelf") { img ->
+                if (img != null) {
+                    Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low)
+                }
+            }
+            if (raining) RainOverlay(Modifier.fillMaxSize())
+            Box(
+                Modifier.fillMaxSize().background(
+                    Brush.verticalGradient(0f to Color.Transparent, 0.45f to Color.Black.copy(alpha = 0.05f), 1f to Color.Black.copy(alpha = 0.5f)),
                 ),
-                exit = fadeOut(tween(140)) + scaleOut(targetScale = 0.94f),
-            ) {
-                ContextMenu(backdrop, focused.label, menu, state.menuIndex, Modifier)
-            }
-        }
-
-        }
-        // ---- End of the blurred home items. ----
-
-        // Recent apps: a cascade of cards (double press of Home, or hold Back).
-        val recentsAlpha by animateFloatAsState(if (Recents.open) 1f else 0f, tween(220), label = "recents")
-        if (recentsAlpha > 0.01f) {
-            RecentCards(
-                items = recentApps, selected = recentIndex, alpha = recentsAlpha, itemKey = { it.pkg },
-                label = { it.label },
-            ) { entry ->
-                AppTile(
-                    entry = entry,
-                    visual = repo.visuals[entry.pkg],
-                    focused = false,
-                    pressed = false,
-                    jiggling = false,
-                    showLabel = true,
-                    nudge = state.nudge,
-                    modifier = Modifier,
-                )
-            }
-        }
-        // TV inputs (HDMI 1, HDMI 2...) under the top buttons.
-        if (inputOpen) {
-            InputPicker(
-                backdrop, inputs.map { it.label }, inputIndex,
-                Modifier.align(Alignment.TopEnd).padding(top = 84.dp, end = Metrics.Margin),
             )
-        }
-        // The name after the greeting.
-        if (editingName) {
-            NameDialog(backdrop, repo.userName) { name ->
-                repo.setName(name)
-                editingName = false
-            }
-        }
-        cc.PasswordLayer(backdrop) { focusRequester.requestFocus() }
+            Box(Modifier.fillMaxSize().graphicsLayer { alpha = blur }.background(Color.Black.copy(alpha = 0.22f)))
 
-    }
+            // Glass dock under the first row; it fades out when you move into the grid.
+            val dockAlpha by animateFloatAsState(if (row == 0) 1f else 0f, tween(300), label = "dock")
+            val headerAlpha by animateFloatAsState(if (row == 0) 1f else 0f, tween(300), label = "header")
+            if (headerAlpha > 0f) {
+                // Lyrics of the song that is playing, on the TV screen of the sky wallpaper.
+                if (tvWallpaper && Features.lyrics) {
+                    TvLyrics(Modifier.fillMaxSize().graphicsLayer { alpha = headerAlpha }, blurAmount = blur)
+                }
 
-}
+                // On the sky wallpaper the left column must stay left of the TV and above the dock.
+                val tvLeft = (TvScreen.LEFT * 960f).dp
+                val columnHeight = maxOf(0.dp, topRowY - DockTop - HeaderTop - 10.dp)
+
+                // Header (greeting, clock, date) with the weather text right next to it,
+                // the verse of the moment under the date, and (sky wallpaper) the now playing card under the verse.
+                Column(
+                    Modifier
+                        .padding(start = Metrics.Margin, top = HeaderTop)
+                        .then(if (tvWallpaper) Modifier.height(columnHeight) else Modifier)
+                        .graphicsLayer { alpha = headerAlpha },
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // The greeting is outlined while it is selected (Up from the top buttons).
+                        Box(
+                            Modifier.drawBehind {
+                                if (nameFocus) {
+                                    drawRoundRect(
+                                        color = Color.White,
+                                        topLeft = Offset(-10.dp.toPx(), -6.dp.toPx()),
+                                        size = Size(size.width + 20.dp.toPx(), size.height + 12.dp.toPx()),
+                                        cornerRadius = CornerRadius(16.dp.toPx()),
+                                        style = Stroke(2.dp.toPx()),
+                                    )
+                                }
+                            },
+                        ) {
+                            HomeHeader(repo.user
