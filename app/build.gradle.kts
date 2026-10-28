@@ -48,7 +48,8 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
 
-    // ADB tiles
-    implementation("io.github.muntashirakon:libadb-android:3.0.0")
-    implementation("io.github.muntashirakon:sun-security-android:1.1")
+    // ADB tiles (published on JitPack, not Maven Central)
+    implementation("com.github.MuntashirAkon:libadb-android:3.1.0")
+    implementation("com.github.MuntashirAkon:sun-security-android:1.1")
+    implementation("org.conscrypt:conscrypt-android:2.5.3")
 }
