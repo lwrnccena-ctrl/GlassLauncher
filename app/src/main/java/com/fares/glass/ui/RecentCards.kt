@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -26,14 +25,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
@@ -48,6 +41,7 @@ private class Ghost<T>(val key: Any, val item: T, val pos: Float)
 
 /**
  * Recent apps as a cascade of cards: the selected one in front, the others peeking out behind it.
+ * The cards are the apps' own tiles, scaled up, with no extra frame.
  */
 @Composable
 fun <T : Any> RecentCards(
@@ -161,8 +155,7 @@ private fun <T> RecentCard(
                         .size(chipW, chipH)
                         .graphicsLayer {
                             translationX = (cardW - 12.dp - chipW).toPx() * pos.value.coerceIn(0f, 1f)
-                        }
-                        .clip(RoundedCornerShape(9.dp)),
+                        },
                 ) { ScaledTile(item, chipScale, content) }
                 Spacer(Modifier.width(12.dp))
                 BasicText(
@@ -172,23 +165,7 @@ private fun <T> RecentCard(
                     maxLines = 1,
                 )
             }
-            Box(
-                Modifier
-                    .size(cardW, cardH)
-                    .clip(RoundedCornerShape(26.dp))
-                    .drawWithContent {
-                        drawContent()
-                        val ring = 1f - abs(pos.value).coerceAtMost(1f)
-                        val inset = 1.dp.toPx()
-                        drawRoundRect(
-                            color = Color.White.copy(alpha = 0.75f * ring),
-                            topLeft = Offset(inset, inset),
-                            size = Size(size.width - inset * 2, size.height - inset * 2),
-                            cornerRadius = CornerRadius(26.dp.toPx()),
-                            style = Stroke(2.dp.toPx()),
-                        )
-                    },
-            ) { ScaledTile(item, faceScale, content) }
+            Box(Modifier.size(cardW, cardH)) { ScaledTile(item, faceScale, content) }
         }
     }
 }
