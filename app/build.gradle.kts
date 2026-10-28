@@ -52,4 +52,8 @@ dependencies {
     implementation("com.github.MuntashirAkon:libadb-android:3.1.0")
     implementation("com.github.MuntashirAkon:sun-security-android:1.1")
     implementation("org.conscrypt:conscrypt-android:2.5.3")
+
+    // Certificate for the ADB key (fixes "Subject class type invalid")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
 }
