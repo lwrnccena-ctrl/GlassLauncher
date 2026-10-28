@@ -594,4 +594,162 @@ fun HomeScreen(
                                 }
                             },
                         ) {
-                            HomeHeader(repo.user
+                            HomeHeader(repo.userName, Modifier)
+                        }
+                        if (weather != null && Features.weather) {
+                            Spacer(Modifier.width(28.dp))
+                            WeatherWidget(weather)
+                        }
+                    }
+                    if (Features.verse) {
+                        VerseText(
+                            backdrop, Modifier.padding(top = 8.dp),
+                            maxWidth = if (tvWallpaper) maxOf(160.dp, tvLeft - Metrics.Margin - 14.dp) else 420.dp,
+                        )
+                    }
+                    if (tvWallpaper && state.mode != Mode.Control && Features.music) {
+                        FitScale(Modifier.weight(1f).padding(top = 10.dp)) {
+                            NowPlayingCard(backdrop, mediaFocus, Modifier)
+                        }
+                    }
+                }
+                if (state.mode != Mode.Control) {
+                    IconBar(
+                        backdrop,
+                        if (state.mode == Mode.Top && mediaFocus < 0 && !nameFocus) state.topIndex else -1,
+                        Modifier.align(Alignment.TopEnd).padding(top = 34.dp, end = Metrics.Margin).graphicsLayer { alpha = headerAlpha },
+                    )
+                    // Now playing: visible while a music app is running (playing or paused).
+                    // With the sky wallpaper it sits under the verse instead (see above).
+                    if (!tvWallpaper && Features.music) {
+                        NowPlayingCard(
+                            backdrop, mediaFocus,
+                            Modifier.align(Alignment.TopEnd).padding(top = 84.dp, end = Metrics.Margin).graphicsLayer { alpha = headerAlpha },
+                        )
+                    }
+                }
+            }
+            if (dockAlpha > 0f) {
+                Glass(
+                    backdrop,
+                    Modifier
+                        .offset { IntOffset((Metrics.Margin - DockInset).roundToPx(), (topRowY - DockTop - scroll.value.dp).roundToPx()) }
+                        .size(960.dp - (Metrics.Margin - DockInset) * 2, DockHeight)
+                        .graphicsLayer { alpha = dockAlpha },
+                    shape = RoundedCornerShape(36.dp),
+                    tint = Color.White.copy(alpha = 0.06f),
+                    source = ambience,
+                )
+            }
+
+            // Grid: only rows near the selection are composed.
+            val visibleRows = (row - 2)..(row + 3)
+            apps.forEachIndexed { i, entry ->
+                if (i / Metrics.COLS in visibleRows) key(entry.pkg) {
+                    // When an app is moved or hidden, the others slide to their new place.
+                    val slide = spring<Float>(dampingRatio = 0.85f, stiffness = 320f)
+                    val x by animateFloatAsState(tileX(i).value, slide, label = "x")
+                    val baseY by animateFloatAsState((topRowY + Metrics.Pitch * (i / Metrics.COLS)).value, slide, label = "y")
+                    AppTile(
+                        entry = entry,
+                        visual = repo.visuals[entry.pkg],
+                        focused = i == state.focus && state.mode != Mode.Control && state.mode != Mode.Top,
+                        pressed = i == state.focus && state.pressed,
+                        jiggling = state.mode == Mode.Jiggle && i == state.focus,
+                        showLabel = i >= Metrics.COLS,
+                        nudge = state.nudge,
+                        modifier = Modifier
+                            .offset { IntOffset(x.dp.roundToPx(), (baseY - scroll.value).dp.roundToPx()) }
+                            .graphicsLayer {
+                                // Rows scrolling off the top fade out, as on tvOS.
+                                val y = baseY - scroll.value
+                                alpha = ((y + 60f) / 100f).coerceIn(0f, 1f)
+                            },
+                    )
+                }
+            }
+
+            Box(Modifier.fillMaxSize().graphicsLayer { alpha = dim }.background(Color.Black))
+
+            AnimatedVisibility(
+                state.mode == Mode.Jiggle, Modifier.align(Alignment.TopCenter).padding(top = 32.dp),
+                enter = fadeIn() + scaleIn(initialScale = 0.9f), exit = fadeOut() + scaleOut(targetScale = 0.9f),
+            ) {
+                HintPill(backdrop, stringResource(R.string.hint_move, focused?.label.orEmpty()), Modifier)
+            }
+
+            AnimatedVisibility(
+                state.mode == Mode.Control, Modifier.align(Alignment.TopEnd).padding(top = 12.dp, end = 24.dp),
+                enter = fadeIn(tween(220)) + slideInHorizontally(spring(dampingRatio = 0.85f, stiffness = 420f)) { it / 2 },
+                exit = fadeOut(tween(180)) + slideOutHorizontally(tween(220)) { it / 2 },
+            ) {
+                cc.Panel(backdrop, wallpaperName, Modifier)
+            }
+
+            if (focused != null) {
+                val tx = tileX(state.focus).value
+                val ty = tileY(state.focus)
+                val above = ty - MenuHeight.value - 14f > 16f
+                val mx = (tx + Metrics.TileW.value / 2 - MenuWidth.value / 2)
+                    .coerceIn(Metrics.Margin.value, 960f - Metrics.Margin.value - MenuWidth.value)
+                val my = if (above) ty - MenuHeight.value - 14f else ty + Metrics.TileH.value + 40f
+                AnimatedVisibility(
+                    state.mode == Mode.Menu, Modifier.offset(mx.dp, my.dp),
+                    enter = fadeIn(tween(180)) + scaleIn(
+                        spring(dampingRatio = 0.75f, stiffness = 600f), 0.9f, TransformOrigin(0.5f, if (above) 1f else 0f),
+                    ),
+                    exit = fadeOut(tween(140)) + scaleOut(targetScale = 0.94f),
+                ) {
+                    ContextMenu(backdrop, focused.label, menu, state.menuIndex, Modifier)
+                }
+            }
+        }
+        // ---- End of the scene. ----
+
+        // Android 7-11: the blurred snapshot of the scene, faded in.
+        frozen?.let {
+            Image(
+                it, null,
+                Modifier.fillMaxSize().graphicsLayer { alpha = frozenAlpha },
+                contentScale = ContentScale.FillBounds, filterQuality = FilterQuality.Low,
+            )
+        }
+
+        // Recent apps: a cascade of cards (double press of Home, or hold Back).
+        val recentsAlpha by animateFloatAsState(if (Recents.open) 1f else 0f, tween(220), label = "recents")
+        if (recentsAlpha > 0.01f) {
+            RecentCards(
+                items = recentApps, selected = recentIndex, alpha = recentsAlpha, itemKey = { it.pkg },
+                label = { it.label },
+            ) { entry ->
+                AppTile(
+                    entry = entry,
+                    visual = repo.visuals[entry.pkg],
+                    focused = false,
+                    pressed = false,
+                    jiggling = false,
+                    showLabel = true,
+                    nudge = state.nudge,
+                    modifier = Modifier,
+                )
+            }
+        }
+        // TV inputs (HDMI 1, HDMI 2...) under the top buttons.
+        if (inputOpen) {
+            InputPicker(
+                backdrop, inputs.map { it.label }, inputIndex,
+                Modifier.align(Alignment.TopEnd).padding(top = 84.dp, end = Metrics.Margin),
+            )
+        }
+        // The name after the greeting.
+        if (editingName) {
+            NameDialog(backdrop, repo.userName) { name ->
+                repo.setName(name)
+                editingName = false
+            }
+        }
+        cc.PasswordLayer(backdrop) { focusRequester.requestFocus() }
+
+    }
+
+}
