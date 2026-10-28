@@ -8,6 +8,7 @@ import android.content.IntentFilter
 import android.graphics.Rect
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -41,6 +42,7 @@ import com.fares.glass.ui.ControlCenter
 import com.fares.glass.ui.HomeScreen
 import com.fares.glass.ui.HomeState
 import com.fares.glass.ui.Mode
+import com.fares.glass.ui.Recents
 import com.fares.glass.ui.Typo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -69,6 +71,8 @@ class MainActivity : ComponentActivity() {
     private var lat = WeatherRepository.DEFAULT_LAT
     private var lon = WeatherRepository.DEFAULT_LON
     private var skyKey = ""
+    // When Home was last pressed: two presses close together open the recent apps.
+    private var lastHomeAt = 0L
 
     private val packages = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -81,6 +85,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         repo = AppRepository(this)
         Typo.load(this)
+        Recents.load(this)
         intent.getStringExtra("name")?.let(repo::setName)
         loadLocation()
         readLocation(intent)
@@ -152,7 +157,19 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         intent.getStringExtra("name")?.let(repo::setName)
         if (readLocation(intent)) lifecycleScope.launch { refreshWeather() }
-        if (intent.hasCategory(Intent.CATEGORY_HOME)) home.goHome()
+        if (intent.hasCategory(Intent.CATEGORY_HOME)) {
+            // A second press of Home shortly after the first opens the recent apps. Presses closer than
+            // 150 ms are ignored, in case the TV delivers one press twice.
+            val now = SystemClock.elapsedRealtime()
+            val gap = now - lastHomeAt
+            if (gap in 150L..900L && !Recents.open) {
+                Recents.open = true
+            } else if (gap >= 150L) {
+                Recents.open = false
+                home.goHome()
+            }
+            if (gap >= 150L) lastHomeAt = now
+        }
     }
 
     override fun onDestroy() {
@@ -250,6 +267,7 @@ class MainActivity : ComponentActivity() {
 
     /** from = where the system animation starts; null = no system animation (the launcher drew its own). */
     private fun launch(entry: AppEntry, from: Rect?) {
+        if (entry.pkg != packageName) Recents.push(entry.pkg)
         val options = if (from != null) {
             ActivityOptions.makeScaleUpAnimation(window.decorView, from.left, from.top, from.width(), from.height())
         } else {
