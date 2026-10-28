@@ -6,6 +6,8 @@ import io.github.muntashirakon.adb.AbsAdbConnectionManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.net.Inet4Address
+import java.net.NetworkInterface
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.PrivateKey
@@ -71,16 +73,31 @@ object AdbController {
 
     private fun err(t: Throwable) = "ADB error: ${t.javaClass.simpleName}: ${t.message ?: ""}".trim()
 
-    /** Finds the Wireless-debugging port by itself (mDNS), else tries classic port 5555. */
-    suspend fun connect(ctx: Context): Result = withContext(Dispatchers.IO) {
+    /** Last host that connected successfully (prefilled in the IP box next time). */
+    @Volatile var lastHost: String? = null
+
+    /** This device's own IPv4 address, or null if none is found. */
+    fun localIp(): String? = runCatching {
+        NetworkInterface.getNetworkInterfaces().toList()
+            .filter { it.isUp && !it.isLoopback }
+            .flatMap { it.inetAddresses.toList() }
+            .firstOrNull { it is Inet4Address }?.hostAddress
+    }.getOrNull()
+
+    /** Tries the given host (the TV's IP), the last good host, this device's IP and localhost on port 5555, then mDNS. */
+    suspend fun connect(ctx: Context, host: String? = null): Result = withContext(Dispatchers.IO) {
         try {
             val m = GlassAdb.get(ctx)
             if (m.isConnected) return@withContext Result(true, "Connected")
-            runCatching { m.autoConnect(ctx, 5000) }
-            if (m.isConnected) return@withContext Result(true, "Connected")
-            runCatching { m.connect("127.0.0.1", 5555) }
+            val hosts = listOfNotNull(host?.trim()?.takeIf { it.isNotEmpty() }, lastHost, localIp(), "127.0.0.1").distinct()
+            var lastErr: Throwable? = null
+            for (h in hosts) {
+                try { m.connect(h, 5555) } catch (t: Throwable) { lastErr = t }
+                if (m.isConnected) { lastHost = h; return@withContext Result(true, "Connected") }
+            }
+            runCatching { m.autoConnect(ctx, 3000) }
             if (m.isConnected) Result(true, "Connected")
-            else Result(false, "Not paired yet. Turn on Wireless debugging, then pair.")
+            else Result(false, lastErr?.let { err(it) } ?: "Not connected.")
         } catch (t: Throwable) { Result(false, err(t)) }
     }
 
