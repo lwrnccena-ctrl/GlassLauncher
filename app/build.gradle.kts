@@ -38,6 +38,14 @@ android {
     }
 }
 
+// libadb-android / sun-security-android pull in bcprov-jdk15to18, which has
+// the same classes as bcprov-jdk18on. Keep only the jdk18on artifacts.
+configurations.all {
+    exclude(group = "org.bouncycastle", module = "bcprov-jdk15to18")
+    exclude(group = "org.bouncycastle", module = "bcpkix-jdk15to18")
+    exclude(group = "org.bouncycastle", module = "bcutil-jdk15to18")
+}
+
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2026.02.01")
     implementation(composeBom)
@@ -54,6 +62,7 @@ dependencies {
     implementation("org.conscrypt:conscrypt-android:2.5.3")
 
     // Certificate for the ADB key (fixes "Subject class type invalid")
-    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
-    implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
+    // Same version the ADB libraries expect, jdk18on variant only.
+    implementation("org.bouncycastle:bcprov-jdk18on:1.81")
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.81")
 }
