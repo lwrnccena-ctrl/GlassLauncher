@@ -4,6 +4,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -25,23 +27,31 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import com.fares.glass.sys.Screenshots
 import kotlin.math.abs
 
 private val ZeroState: State<Float> = mutableStateOf(0f)
+
+/** Corner radius of a card that shows a real screenshot (cards without one use the app's own tile shape). */
+private val ShotRadius = 28.dp
 
 private class Ghost<T>(val key: Any, val item: T, val pos: Float)
 
 /**
  * Recent apps as a cascade of cards: the selected one in front, the others peeking out behind it.
- * The cards are the apps' own tiles, scaled up, with no extra frame.
+ * A card shows the app's last screenshot when there is one, otherwise the app's own tile, scaled up.
+ * The item key is the package name.
  */
 @Composable
 fun <T : Any> RecentCards(
@@ -80,7 +90,7 @@ fun <T : Any> RecentCards(
                 )
                 RecentCard(
                     pos, ZeroState, fade, 10f - abs(i - selected), peek, cardW, cardH,
-                    label(item), item, content,
+                    label(item), itemKey(item), item, content,
                 )
             }
         }
@@ -95,7 +105,7 @@ fun <T : Any> RecentCards(
                 }
                 RecentCard(
                     pos, leave.asState(), fade, 10f - abs(g.pos), peek, cardW, cardH,
-                    label(g.item), g.item, content,
+                    label(g.item), g.key, g.item, content,
                 )
             }
         }
@@ -125,6 +135,7 @@ private fun <T> RecentCard(
     cardW: Dp,
     cardH: Dp,
     title: String,
+    shotKey: Any,
     item: T,
     content: @Composable (T) -> Unit,
 ) {
@@ -132,6 +143,7 @@ private fun <T> RecentCard(
     val chipScale = chipH.value / Metrics.TileH.value
     val chipW = Metrics.TileW * chipScale
     val faceScale = cardW.value / Metrics.TileW.value
+    val shot = (shotKey as? String)?.let { Screenshots.get(it) }
 
     Box(Modifier.fillMaxSize().zIndex(z), contentAlignment = Alignment.Center) {
         Column(
@@ -165,7 +177,16 @@ private fun <T> RecentCard(
                     maxLines = 1,
                 )
             }
-            Box(Modifier.size(cardW, cardH)) { ScaledTile(item, faceScale, content) }
+            if (shot != null) {
+                Image(
+                    shot, null,
+                    Modifier.size(cardW, cardH).clip(RoundedCornerShape(ShotRadius)),
+                    contentScale = ContentScale.Crop,
+                    filterQuality = FilterQuality.Medium,
+                )
+            } else {
+                Box(Modifier.size(cardW, cardH)) { ScaledTile(item, faceScale, content) }
+            }
         }
     }
 }
