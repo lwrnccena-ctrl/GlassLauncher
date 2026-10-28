@@ -9,6 +9,7 @@ import java.io.File
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.PrivateKey
+import java.security.Security
 import java.security.cert.Certificate
 import java.security.cert.CertificateFactory
 import java.security.spec.PKCS8EncodedKeySpec
@@ -32,7 +33,9 @@ class GlassAdb private constructor(private val ctx: Context) : AbsAdbConnectionM
                 priv = KeyFactory.getInstance("RSA").generatePrivate(PKCS8EncodedKeySpec(kf.readBytes()))
                 cert = CertificateFactory.getInstance("X.509").generateCertificate(cf.inputStream())
                 return
-            } catch (_: Exception) {}
+            } catch (_: Throwable) {
+                kf.delete(); cf.delete()
+            }
         }
         val kp = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
         val c = CertUtil.selfSigned(kp)
@@ -42,7 +45,20 @@ class GlassAdb private constructor(private val ctx: Context) : AbsAdbConnectionM
 
     companion object {
         @Volatile private var inst: GlassAdb? = null
-        fun get(c: Context) = inst ?: synchronized(this) { inst ?: GlassAdb(c.applicationContext).also { inst = it } }
+        @Volatile private var providerReady = false
+
+        private fun ensureProvider() {
+            if (providerReady) return
+            runCatching { Security.insertProviderAt(org.conscrypt.Conscrypt.newProvider(), 1) }
+            providerReady = true
+        }
+
+        fun get(c: Context): GlassAdb {
+            ensureProvider()
+            return inst ?: synchronized(this) {
+                inst ?: GlassAdb(c.applicationContext).also { inst = it }
+            }
+        }
     }
 }
 
@@ -53,15 +69,19 @@ object AdbController {
 
     data class Result(val ok: Boolean, val output: String)
 
+    private fun err(t: Throwable) = "ADB error: ${t.javaClass.simpleName}: ${t.message ?: ""}".trim()
+
     /** Finds the Wireless-debugging port by itself (mDNS), else tries classic port 5555. */
     suspend fun connect(ctx: Context): Result = withContext(Dispatchers.IO) {
-        val m = GlassAdb.get(ctx)
-        if (m.isConnected) return@withContext Result(true, "Connected")
-        runCatching { m.autoConnect(ctx, 5000) }
-        if (m.isConnected) return@withContext Result(true, "Connected")
-        runCatching { m.connect("127.0.0.1", 5555) }
-        if (m.isConnected) Result(true, "Connected")
-        else Result(false, "Not paired yet. Turn on Wireless debugging, then pair.")
+        try {
+            val m = GlassAdb.get(ctx)
+            if (m.isConnected) return@withContext Result(true, "Connected")
+            runCatching { m.autoConnect(ctx, 5000) }
+            if (m.isConnected) return@withContext Result(true, "Connected")
+            runCatching { m.connect("127.0.0.1", 5555) }
+            if (m.isConnected) Result(true, "Connected")
+            else Result(false, "Not paired yet. Turn on Wireless debugging, then pair.")
+        } catch (t: Throwable) { Result(false, err(t)) }
     }
 
     /** One-time pairing with the 6-digit code shown by Wireless debugging. */
@@ -69,17 +89,18 @@ object AdbController {
         try {
             GlassAdb.get(ctx).pair("127.0.0.1", port, code)
             connect(ctx)
-        } catch (e: Exception) { Result(false, "Pairing failed: ${e.message}") }
+        } catch (t: Throwable) { Result(false, "Pairing failed: ${err(t)}") }
     }
 
     suspend fun run(ctx: Context, command: String): Result {
-        if (!connect(ctx).ok) return Result(false, "Not connected")
+        val c = connect(ctx)
+        if (!c.ok) return Result(false, c.output)
         return withContext(Dispatchers.IO) {
             try {
                 GlassAdb.get(ctx).openStream("shell:$command").use { s ->
                     Result(true, s.openInputStream().bufferedReader().readText().trim().ifEmpty { "Done" })
                 }
-            } catch (e: Exception) { Result(false, e.message ?: "Command failed") }
+            } catch (t: Throwable) { Result(false, err(t)) }
         }
     }
 }
