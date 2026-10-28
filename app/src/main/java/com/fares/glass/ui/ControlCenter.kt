@@ -4,7 +4,9 @@ import android.Manifest
 import android.bluetooth.BluetoothAdapter
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.Settings
 import android.view.KeyEvent as AndroidKey
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
@@ -51,6 +53,7 @@ import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.MusicNote
@@ -61,6 +64,7 @@ import androidx.compose.material.icons.rounded.SettingsRemote
 import androidx.compose.material.icons.rounded.Smartphone
 import androidx.compose.material.icons.rounded.SportsEsports
 import androidx.compose.material.icons.rounded.Subtitles
+import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Tv
 import androidx.compose.material.icons.rounded.ViewCarousel
@@ -100,12 +104,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fares.glass.R
 import com.fares.glass.data.AppRepository
+import com.fares.glass.sys.AdbController
 import com.fares.glass.sys.BluetoothController
 import com.fares.glass.sys.BtKind
 import com.fares.glass.sys.SettingsShortcuts
@@ -113,9 +119,13 @@ import com.fares.glass.sys.SettingsShortcuts.Section
 import com.fares.glass.sys.SystemInfo
 import com.fares.glass.sys.WifiController
 import com.fares.glass.sys.WifiNet
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import java.util.Locale
 
-enum class CcPage { Main, Wifi, Bluetooth }
+enum class CcPage { Main, Wifi, Bluetooth, Adb }
 
 /** Narrow, tall sheet, like the tvOS Control Center. */
 val PanelWidth = 300.dp
@@ -131,16 +141,18 @@ private val Purple = Color(0xFFBF5AF2)
 /**
  * Selection numbers on the main page:
  * 0-5 module tiles, 6 brightness, 7 volume, 8-11 on/off switches (verse, music, lyrics, weather), 12+ round shortcuts.
+ * ADB_BTN is the round ADB button at the top right, next to the clock.
  */
 private const val BRIGHTNESS = 6
 private const val VOLUME = 7
 private const val FIRST_SWITCH = 8
 private const val SWITCHES = 4
 private const val FIRST_SHORTCUT = FIRST_SWITCH + SWITCHES
+private const val ADB_BTN = 100
 
 private val SunYellow = Color(0xFFFFD60A)
 
-/** One row of a detail page (Wi-Fi, Bluetooth). */
+/** One row of a detail page (Wi-Fi, Bluetooth, ADB). */
 private sealed interface Line {
     val focusable: Boolean get() = true
     /** Stable identity: focus follows the item even when the list changes (device found, scan…). */
@@ -151,7 +163,9 @@ private sealed interface Line {
     data class Device(val address: String, val name: String, val subtitle: String, val icon: ImageVector, val bonded: Boolean, val connected: Boolean) : Line {
         override val key get() = "dev:$address"
     }
-    data class Action(val title: String, val icon: ImageVector) : Line { override val key get() = "action" }
+    data class Action(val title: String, val icon: ImageVector, val id: String = "action") : Line { override val key get() = "action:$id" }
+    /** An ADB permission row: shows a check once it is granted. */
+    data class Cmd(val id: String, val title: String, val subtitle: String, val done: Boolean) : Line { override val key get() = "cmd:$id" }
     data class Link(val title: String, val section: Section) : Line { override val key get() = "link" }
     data class Note(val text: String) : Line { override val focusable get() = false; override val key get() = "note:$text" }
 }
@@ -170,7 +184,7 @@ private val Section.icon: ImageVector
 
 /**
  * tvOS-style Control Center: a grid of modules, a System module, round shortcuts, and Wi-Fi /
- * Bluetooth pages that slide inside the panel. All remote navigation for it lives here.
+ * Bluetooth / ADB pages that slide inside the panel. All remote navigation for it lives here.
  */
 class ControlCenter(
     private val context: Context,
@@ -204,7 +218,18 @@ class ControlCenter(
     /** Bumped to re-read memory, storage and animations. */
     var tick by mutableIntStateOf(0)
 
-    val typing get() = passwordFor != null
+    // ---- ADB state ----
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    var adbStatus by mutableStateOf("")
+    var adbConnected by mutableStateOf(false)
+    private var adbBusy = false
+    private var adbTick by mutableIntStateOf(0)
+    /** 0 = not typing, 1 = typing the pairing port, 2 = typing the 6-digit code. */
+    var pairStep by mutableIntStateOf(0)
+    var pairText by mutableStateOf("")
+    private var pairPort = 0
+
+    val typing get() = passwordFor != null || pairStep != 0
 
     /** Round shortcuts: sections this TV really lets Glass open (up to 4), plus "All settings". */
     private val shortcuts: List<Section> by lazy {
@@ -240,7 +265,7 @@ class ControlCenter(
 
     fun open(target: CcPage) {
         page = target
-        index = when (target) { CcPage.Wifi -> 0; CcPage.Bluetooth -> 4; CcPage.Main -> 0 }
+        index = when (target) { CcPage.Wifi -> 0; CcPage.Bluetooth -> 4; CcPage.Main -> 0; CcPage.Adb -> 0 }
         rowKey = "toggle"
         wifi.start()
         bt.start()
@@ -252,7 +277,78 @@ class ControlCenter(
         wifi.stop()
         bt.stop()
         passwordFor = null
+        pairStep = 0
+        pairText = ""
         onClose()
+    }
+
+    // ---- ADB ----
+
+    private fun adbSecure() =
+        context.checkSelfPermission("android.permission.WRITE_SECURE_SETTINGS") == PackageManager.PERMISSION_GRANTED
+
+    private fun adbListener() =
+        (Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners") ?: "")
+            .contains(context.packageName)
+
+    private fun openAdb() {
+        page = CcPage.Adb
+        rowKey = "action:connect"
+        adbTick++
+        adbConnect()
+    }
+
+    private fun adbConnect() {
+        if (adbBusy) return
+        adbBusy = true
+        adbStatus = "Connecting…"
+        scope.launch {
+            val r = AdbController.connect(context)
+            adbConnected = r.ok
+            adbStatus = if (r.ok) "Connected" else
+                "Not paired yet. Turn on Wireless debugging in Developer options, then choose Pair with code."
+            adbBusy = false
+            adbTick++
+        }
+    }
+
+    private fun adbRun(command: String) {
+        if (adbBusy) return
+        adbBusy = true
+        adbStatus = "Running…"
+        scope.launch {
+            val r = AdbController.run(context, command)
+            adbConnected = adbConnected || r.ok
+            adbStatus = if (r.ok) "Done" else r.output
+            adbBusy = false
+            adbTick++
+        }
+    }
+
+    /** Called when OK / Done is pressed in the pairing text field. */
+    fun submitPair() {
+        val text = pairText.filter(Char::isDigit)
+        pairText = ""
+        if (pairStep == 1) {
+            pairPort = text.toIntOrNull() ?: 0
+            pairStep = if (pairPort > 0) 2 else 0
+            return
+        }
+        pairStep = 0
+        if (pairPort <= 0 || text.length != 6) {
+            adbStatus = "Enter the port, then the 6-digit code."
+            return
+        }
+        if (adbBusy) return
+        adbBusy = true
+        adbStatus = "Pairing…"
+        scope.launch {
+            val r = AdbController.pair(context, pairPort, text)
+            adbConnected = r.ok
+            adbStatus = if (r.ok) "Paired and connected" else r.output
+            adbBusy = false
+            adbTick++
+        }
     }
 
     // ---- Main page ----
@@ -300,12 +396,18 @@ class ControlCenter(
             FIRST_SWITCH + 1 -> Features.toggleMusic()
             FIRST_SWITCH + 2 -> Features.toggleLyrics()
             FIRST_SWITCH + 3 -> Features.toggleWeather()
+            ADB_BTN -> openAdb()
             else -> open(shortcuts[index - FIRST_SHORTCUT])
         }
     }
 
     private fun moveMain(dx: Int, dy: Int) {
         val i = index
+        // The ADB button sits above the first row of tiles.
+        if (i == ADB_BTN) {
+            if (dy > 0) index = 1 else if (dx < 0) index = 0
+            return
+        }
         // On the two sliders Left / Right change the value.
         if (dx != 0 && i == BRIGHTNESS) { levels.adjustBrightness(dx); return }
         if (dx != 0 && i == VOLUME) { levels.adjustVolume(dx); return }
@@ -315,6 +417,7 @@ class ControlCenter(
                 dx > 0 && i % 2 == 0 -> i + 1
                 dy > 0 -> if (i < 4) i + 2 else BRIGHTNESS
                 dy < 0 && i >= 2 -> i - 2
+                dy < 0 && i < 2 -> ADB_BTN
                 else -> i
             }
             i == BRIGHTNESS -> when {
@@ -376,6 +479,17 @@ class ControlCenter(
             bt.status?.let { add(Line.Note(it)) }
             if (settings.available(Section.Devices)) add(Line.Link(str(R.string.bt_system_settings), Section.Devices))
         }
+        CcPage.Adb -> buildList {
+            @Suppress("UNUSED_EXPRESSION") adbTick
+            val secure = adbSecure()
+            val listener = adbListener()
+            add(Line.Action(if (adbConnected) "ADB connected" else "Connect", Icons.Rounded.Terminal, "connect"))
+            if (!adbConnected) add(Line.Action("Pair with code", Icons.Rounded.Link, "pair"))
+            add(Line.Header("Permissions"))
+            add(Line.Cmd("secure", "Secure settings", if (secure) "Granted" else "OK to grant", secure))
+            add(Line.Cmd("listener", "Media listener", if (listener) "Allowed" else "OK to allow", listener))
+            if (adbStatus.isNotEmpty()) add(Line.Note(adbStatus))
+        }
     }
 
     private fun iconFor(kind: BtKind) = when (kind) {
@@ -428,7 +542,19 @@ class ControlCenter(
                 forgetArmed == r.address -> { forgetArmed = null; bt.forget(r.address) }
                 else -> { forgetArmed = r.address; bt.status = str(R.string.bt_forget_confirm, r.name) }
             }
-            is Line.Action -> if (page == CcPage.Wifi) wifi.scan() else bt.discover()
+            is Line.Action -> when (page) {
+                CcPage.Wifi -> wifi.scan()
+                CcPage.Bluetooth -> bt.discover()
+                CcPage.Adb -> when (r.id) {
+                    "connect" -> adbConnect()
+                    "pair" -> { pairText = ""; pairStep = 1 }
+                }
+                else -> Unit
+            }
+            is Line.Cmd -> when (r.id) {
+                "secure" -> adbRun(AdbController.CMD_WRITE_SECURE)
+                "listener" -> adbRun(AdbController.CMD_MEDIA_LISTENER)
+            }
             is Line.Link -> open(r.section)
             else -> Unit
         }
@@ -444,6 +570,8 @@ class ControlCenter(
     fun cancelPassword() {
         passwordFor = null
         password = ""
+        pairStep = 0
+        pairText = ""
     }
 
     /** Keys while the Control Center is open. Returns true if the key is consumed. */
@@ -504,8 +632,14 @@ class ControlCenter(
         val (time, date) = rememberClock(rememberNow())
         val tiles = tiles(wallpaperName)
         Column(Modifier.fillMaxSize()) {
-            BasicText(time, style = txt(White, 28.sp, FontWeight.Bold))
-            BasicText(date, style = txt(White.copy(alpha = 0.7f), 13.sp, FontWeight.Medium))
+            // Clock on the left, round ADB button on the right.
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                Column(Modifier.weight(1f)) {
+                    BasicText(time, style = txt(White, 28.sp, FontWeight.Bold))
+                    BasicText(date, style = txt(White.copy(alpha = 0.7f), 13.sp, FontWeight.Medium))
+                }
+                RoundButton(Icons.Rounded.Terminal, index == ADB_BTN)
+            }
             Spacer(Modifier.height(8.dp))
             for (r in 0 until 3) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -540,7 +674,11 @@ class ControlCenter(
             }
             Spacer(Modifier.height(6.dp))
             BasicText(
-                if (index >= FIRST_SHORTCUT) str(shortcuts[index - FIRST_SHORTCUT].title) else " ",
+                when {
+                    index == ADB_BTN -> "ADB"
+                    index >= FIRST_SHORTCUT -> str(shortcuts[index - FIRST_SHORTCUT].title)
+                    else -> " "
+                },
                 Modifier.fillMaxWidth(),
                 style = txt(White.copy(alpha = 0.85f), 13.sp, FontWeight.SemiBold).copy(textAlign = androidx.compose.ui.text.style.TextAlign.Center),
             )
@@ -665,7 +803,10 @@ class ControlCenter(
         Column {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Image(rememberVectorPainter(Icons.Rounded.ChevronLeft), null, Modifier.size(26.dp), colorFilter = ColorFilter.tint(White.copy(alpha = 0.7f)))
-                BasicText(if (p == CcPage.Wifi) "Wi-Fi" else "Bluetooth", style = txt(White, 24.sp, FontWeight.Bold))
+                BasicText(
+                    when (p) { CcPage.Wifi -> "Wi-Fi"; CcPage.Adb -> "ADB"; else -> "Bluetooth" },
+                    style = txt(White, 24.sp, FontWeight.Bold),
+                )
             }
             Spacer(Modifier.height(12.dp))
             // Sliding window: the selected row stays visible.
@@ -682,7 +823,7 @@ class ControlCenter(
             is Line.Header -> BasicText(r.title.uppercase(Locale.getDefault()), Modifier.padding(start = 12.dp, top = 8.dp, bottom = 4.dp),
                 style = txt(White.copy(alpha = 0.55f), 11.sp, FontWeight.SemiBold))
             is Line.Note -> BasicText(r.text, Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                style = txt(White.copy(alpha = 0.6f), 12.sp, FontWeight.Medium), maxLines = 2)
+                style = txt(White.copy(alpha = 0.6f), 12.sp, FontWeight.Medium), maxLines = 3)
             else -> {
                 val f = focusAmount(focused)
                 val fg = lerp(White, Ink, f)
@@ -728,6 +869,15 @@ class ControlCenter(
                             Spacer(Modifier.width(10.dp))
                             BasicText(r.title, style = txt(fg, 14.sp, FontWeight.SemiBold))
                         }
+                        is Line.Cmd -> {
+                            Icon(Icons.Rounded.Terminal, fg, 18)
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                BasicText(r.title, style = txt(fg, 14.sp, FontWeight.SemiBold), maxLines = 1)
+                                BasicText(r.subtitle, style = txt(fg.copy(alpha = 0.6f), 11.sp, FontWeight.Medium), maxLines = 1)
+                            }
+                            if (r.done) Icon(Icons.Rounded.Check, if (f > 0.5f) Ink else Green, 18)
+                        }
                         is Line.Link -> {
                             BasicText(r.title, Modifier.weight(1f), style = txt(fg, 13.sp, FontWeight.Medium), maxLines = 1)
                             Icon(Icons.Rounded.OpenInNew, fg.copy(alpha = 0.6f), 16)
@@ -767,33 +917,48 @@ class ControlCenter(
         }
     }
 
-    /** Wi-Fi password entry, centered on screen (place it at the root). */
+    /**
+     * Text entry, centered on screen (place it at the root). Used for the Wi-Fi password and,
+     * in two steps, for the ADB pairing port and 6-digit code.
+     */
     @Composable
     fun PasswordLayer(backdrop: Backdrop, onTypingDone: () -> Unit) {
-        val net = passwordFor ?: return
+        val pairing = pairStep != 0
+        val net = passwordFor
+        if (net == null && !pairing) return
         val field = remember { FocusRequester() }
         val keyboard = LocalSoftwareKeyboardController.current
-        LaunchedEffect(net) {
+        LaunchedEffect(net, pairStep) {
             field.requestFocus()
             keyboard?.show()
         }
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)), contentAlignment = Alignment.Center) {
             Glass(backdrop, Modifier.width(440.dp), RoundedCornerShape(32.dp), tint = White.copy(alpha = 0.10f)) {
                 Column(Modifier.padding(24.dp)) {
-                    BasicText(str(R.string.wifi_password), style = txt(White, 22.sp, FontWeight.Bold))
-                    BasicText(str(R.string.wifi_password_for, net.ssid), style = txt(White.copy(alpha = 0.7f), 14.sp, FontWeight.Medium))
+                    BasicText(
+                        if (pairing) (if (pairStep == 1) "Pairing port" else "Pairing code") else str(R.string.wifi_password),
+                        style = txt(White, 22.sp, FontWeight.Bold),
+                    )
+                    BasicText(
+                        if (pairing) (if (pairStep == 1) "Type the port shown next to the IP address" else "Type the 6-digit code")
+                        else str(R.string.wifi_password_for, net?.ssid ?: ""),
+                        style = txt(White.copy(alpha = 0.7f), 14.sp, FontWeight.Medium),
+                    )
                     Spacer(Modifier.height(16.dp))
                     BasicTextField(
-                        value = password,
-                        onValueChange = { password = it },
+                        value = if (pairing) pairText else password,
+                        onValueChange = { if (pairing) pairText = it else password = it },
                         singleLine = true,
                         textStyle = txt(Ink, 18.sp, FontWeight.Medium),
                         cursorBrush = SolidColor(WifiBlue),
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                        visualTransformation = if (pairing) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = if (pairing) KeyboardType.Number else KeyboardType.Password,
+                            imeAction = ImeAction.Done,
+                        ),
                         keyboardActions = KeyboardActions(onDone = {
                             keyboard?.hide()
-                            submitPassword()
+                            if (pairing) submitPair() else submitPassword()
                             onTypingDone()
                         }),
                         modifier = Modifier
@@ -803,8 +968,11 @@ class ControlCenter(
                             .padding(horizontal = 16.dp, vertical = 12.dp),
                     )
                     Spacer(Modifier.height(10.dp))
-                    BasicText(str(R.string.wifi_password_hint),
-                        style = txt(White.copy(alpha = 0.6f), 12.sp, FontWeight.Medium))
+                    BasicText(
+                        if (pairing) "Keep the pairing screen on the TV in mind: the code stops working if it closes."
+                        else str(R.string.wifi_password_hint),
+                        style = txt(White.copy(alpha = 0.6f), 12.sp, FontWeight.Medium),
+                    )
                 }
             }
         }
