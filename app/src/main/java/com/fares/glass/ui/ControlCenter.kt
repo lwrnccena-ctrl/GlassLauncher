@@ -224,7 +224,7 @@ class ControlCenter(
     var adbConnected by mutableStateOf(false)
     private var adbBusy = false
     private var adbTick by mutableIntStateOf(0)
-    /** 0 = not typing, 1 = typing the pairing port, 2 = typing the 6-digit code. */
+    /** 0 = not typing, 1 = typing the pairing port, 2 = typing the 6-digit code, 3 = typing the TV's IP address. */
     var pairStep by mutableIntStateOf(0)
     var pairText by mutableStateOf("")
     private var pairPort = 0
@@ -295,18 +295,16 @@ class ControlCenter(
         page = CcPage.Adb
         rowKey = "action:connect"
         adbTick++
-        adbConnect()
     }
 
-    private fun adbConnect() {
+    private fun adbConnect(host: String? = null) {
         if (adbBusy) return
         adbBusy = true
-        adbStatus = "Connecting…"
+        adbStatus = "Connecting… (accept the prompt on the TV)"
         scope.launch {
-            val r = AdbController.connect(context)
+            val r = AdbController.connect(context, host)
             adbConnected = r.ok
-            adbStatus = if (r.ok) "Connected" else
-                "Not paired yet. Turn on Wireless debugging in Developer options, then choose Pair with code."
+            adbStatus = if (r.ok) "Connected" else r.output
             adbBusy = false
             adbTick++
         }
@@ -325,8 +323,15 @@ class ControlCenter(
         }
     }
 
-    /** Called when OK / Done is pressed in the pairing text field. */
+    /** Called when OK / Done is pressed in the text field (IP address, pairing port or code). */
     fun submitPair() {
+        if (pairStep == 3) {
+            val ip = pairText.trim()
+            pairText = ""
+            pairStep = 0
+            if (ip.isNotEmpty()) adbConnect(ip) else adbStatus = "Type the TV's IP address."
+            return
+        }
         val text = pairText.filter(Char::isDigit)
         pairText = ""
         if (pairStep == 1) {
@@ -484,7 +489,6 @@ class ControlCenter(
             val secure = adbSecure()
             val listener = adbListener()
             add(Line.Action(if (adbConnected) "ADB connected" else "Connect", Icons.Rounded.Terminal, "connect"))
-            if (!adbConnected) add(Line.Action("Pair with code", Icons.Rounded.Link, "pair"))
             add(Line.Header("Permissions"))
             add(Line.Cmd("secure", "Secure settings", if (secure) "Granted" else "OK to grant", secure))
             add(Line.Cmd("listener", "Media listener", if (listener) "Allowed" else "OK to allow", listener))
@@ -546,8 +550,7 @@ class ControlCenter(
                 CcPage.Wifi -> wifi.scan()
                 CcPage.Bluetooth -> bt.discover()
                 CcPage.Adb -> when (r.id) {
-                    "connect" -> adbConnect()
-                    "pair" -> { pairText = ""; pairStep = 1 }
+                    "connect" -> { pairText = AdbController.lastHost ?: AdbController.localIp() ?: ""; pairStep = 3 }
                 }
                 else -> Unit
             }
@@ -919,7 +922,7 @@ class ControlCenter(
 
     /**
      * Text entry, centered on screen (place it at the root). Used for the Wi-Fi password and,
-     * in two steps, for the ADB pairing port and 6-digit code.
+     * for ADB, the TV's IP address (step 3), the pairing port or the 6-digit code.
      */
     @Composable
     fun PasswordLayer(backdrop: Backdrop, onTypingDone: () -> Unit) {
@@ -936,12 +939,19 @@ class ControlCenter(
             Glass(backdrop, Modifier.width(440.dp), RoundedCornerShape(32.dp), tint = White.copy(alpha = 0.10f)) {
                 Column(Modifier.padding(24.dp)) {
                     BasicText(
-                        if (pairing) (if (pairStep == 1) "Pairing port" else "Pairing code") else str(R.string.wifi_password),
+                        when {
+                            pairStep == 3 -> "TV IP address"
+                            pairing -> if (pairStep == 1) "Pairing port" else "Pairing code"
+                            else -> str(R.string.wifi_password)
+                        },
                         style = txt(White, 22.sp, FontWeight.Bold),
                     )
                     BasicText(
-                        if (pairing) (if (pairStep == 1) "Type the port shown next to the IP address" else "Type the 6-digit code")
-                        else str(R.string.wifi_password_for, net?.ssid ?: ""),
+                        when {
+                            pairStep == 3 -> "Type this TV's IP, then press Done"
+                            pairing -> if (pairStep == 1) "Type the port shown next to the IP address" else "Type the 6-digit code"
+                            else -> str(R.string.wifi_password_for, net?.ssid ?: "")
+                        },
                         style = txt(White.copy(alpha = 0.7f), 14.sp, FontWeight.Medium),
                     )
                     Spacer(Modifier.height(16.dp))
@@ -953,7 +963,11 @@ class ControlCenter(
                         cursorBrush = SolidColor(WifiBlue),
                         visualTransformation = if (pairing) VisualTransformation.None else PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(
-                            keyboardType = if (pairing) KeyboardType.Number else KeyboardType.Password,
+                            keyboardType = when {
+                                pairStep == 3 -> KeyboardType.Uri
+                                pairing -> KeyboardType.Number
+                                else -> KeyboardType.Password
+                            },
                             imeAction = ImeAction.Done,
                         ),
                         keyboardActions = KeyboardActions(onDone = {
@@ -969,8 +983,11 @@ class ControlCenter(
                     )
                     Spacer(Modifier.height(10.dp))
                     BasicText(
-                        if (pairing) "Keep the pairing screen on the TV in mind: the code stops working if it closes."
-                        else str(R.string.wifi_password_hint),
+                        when {
+                            pairStep == 3 -> "The first time, accept the USB debugging prompt on the TV."
+                            pairing -> "Keep the pairing screen on the TV in mind: the code stops working if it closes."
+                            else -> str(R.string.wifi_password_hint)
+                        },
                         style = txt(White.copy(alpha = 0.6f), 12.sp, FontWeight.Medium),
                     )
                 }
