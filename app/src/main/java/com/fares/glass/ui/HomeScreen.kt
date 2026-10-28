@@ -1,5 +1,7 @@
 package com.fares.glass.ui
 
+import android.app.ActivityManager
+import android.content.Context
 import android.graphics.Rect
 import android.view.KeyEvent as AndroidKey
 import androidx.compose.animation.AnimatedVisibility
@@ -148,6 +150,17 @@ fun HomeScreen(
         if (apps.isNotEmpty() && state.focus > apps.lastIndex) state.focus = apps.lastIndex
     }
 
+    // Recent apps: a stack of cards, opened with a double press of Home.
+    var recentIndex by remember { mutableIntStateOf(0) }
+    val recentApps = Recents.list.mapNotNull { pkg -> apps.firstOrNull { it.pkg == pkg } }
+    LaunchedEffect(Recents.open) {
+        if (Recents.open) {
+            recentIndex = 0
+            mediaFocus = -1
+            if (state.mode == Mode.Control) cc.close() else state.mode = Mode.Browse
+        }
+    }
+
     // The dock sits low enough that the second row of apps stays below the bottom edge of the screen.
     var screenHeightDp by remember { mutableFloatStateOf(540f) }
     val dockDrop = run {
@@ -264,8 +277,48 @@ fun HomeScreen(
         }
     }
 
+    /** Keys while the stack of recent apps is showing. */
+    fun recentsKey(e: AndroidKey): Boolean {
+        val down = e.action == AndroidKey.ACTION_DOWN
+        val first = down && e.repeatCount == 0
+        when (e.keyCode) {
+            AndroidKey.KEYCODE_DPAD_LEFT -> if (down) recentIndex = (recentIndex - 1).coerceAtLeast(0)
+            AndroidKey.KEYCODE_DPAD_RIGHT ->
+                if (down) recentIndex = (recentIndex + 1).coerceAtMost((recentApps.size - 1).coerceAtLeast(0))
+            // Up closes the app, as swiping a card up does on Apple devices.
+            AndroidKey.KEYCODE_DPAD_UP -> if (first) {
+                recentApps.getOrNull(recentIndex)?.let { entry ->
+                    Recents.remove(entry.pkg)
+                    try {
+                        (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager)
+                            .killBackgroundProcesses(entry.pkg)
+                    } catch (ex: Exception) {
+                        // The app keeps running in the background; it is only removed from the list.
+                    }
+                    recentIndex = recentIndex.coerceAtMost((recentApps.size - 2).coerceAtLeast(0))
+                }
+            }
+            AndroidKey.KEYCODE_DPAD_DOWN, AndroidKey.KEYCODE_BACK, AndroidKey.KEYCODE_MENU,
+            AndroidKey.KEYCODE_APP_SWITCH -> if (first) Recents.open = false
+            AndroidKey.KEYCODE_DPAD_CENTER, AndroidKey.KEYCODE_ENTER, AndroidKey.KEYCODE_NUMPAD_ENTER,
+            AndroidKey.KEYCODE_BUTTON_A -> if (first) {
+                val entry = recentApps.getOrNull(recentIndex)
+                Recents.open = false
+                if (entry != null) {
+                    // The app opens out of the middle of the screen.
+                    val dm = context.resources.displayMetrics
+                    val w = dm.widthPixels
+                    val h = dm.heightPixels
+                    onLaunch(entry, Rect(w / 2 - w / 8, h / 2 - h / 8, w / 2 + w / 8, h / 2 + h / 8))
+                }
+            }
+        }
+        return true
+    }
+
     fun onKey(event: KeyEvent): Boolean {
         val e = event.nativeKeyEvent
+        if (Recents.open) return recentsKey(e)
         if (state.mode == Mode.Control) return cc.onKey(e)
         val down = e.action == AndroidKey.ACTION_DOWN
 
@@ -326,6 +379,7 @@ fun HomeScreen(
             AndroidKey.KEYCODE_DPAD_DOWN -> if (down) move(0, 1)
             AndroidKey.KEYCODE_BACK -> if (down && e.repeatCount == 0) back()
             AndroidKey.KEYCODE_MENU -> if (down && e.repeatCount == 0) menuKey()
+            AndroidKey.KEYCODE_APP_SWITCH -> if (down && e.repeatCount == 0) Recents.open = true
             AndroidKey.KEYCODE_MEDIA_PLAY_PAUSE -> if (down) {
                 if (state.mode == Mode.Jiggle) {
                     state.menuIndex = 0
@@ -506,6 +560,24 @@ fun HomeScreen(
                 exit = fadeOut(tween(140)) + scaleOut(targetScale = 0.94f),
             ) {
                 ContextMenu(backdrop, focused.label, menu, state.menuIndex, Modifier)
+            }
+        }
+        // Recent apps: a stack of cards (double press of Home).
+        val recentsAlpha by animateFloatAsState(if (Recents.open) 1f else 0f, tween(220), label = "recents")
+        if (recentsAlpha > 0.01f) {
+            RecentStack(
+                items = recentApps, selected = recentIndex, alpha = recentsAlpha, itemKey = { it.pkg },
+            ) { entry ->
+                AppTile(
+                    entry = entry,
+                    visual = repo.visuals[entry.pkg],
+                    focused = false,
+                    pressed = false,
+                    jiggling = false,
+                    showLabel = true,
+                    nudge = state.nudge,
+                    modifier = Modifier,
+                )
             }
         }
         cc.PasswordLayer(backdrop) { focusRequester.requestFocus() }
