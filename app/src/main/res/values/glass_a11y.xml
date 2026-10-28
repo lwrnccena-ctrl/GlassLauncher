@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="glass_a11y_description">Lets Glass take a small picture of each app you use, to show it in the recent apps screen. Pictures stay on this device.</string>
+</resources>
