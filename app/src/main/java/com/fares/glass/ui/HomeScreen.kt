@@ -3,6 +3,7 @@ package com.fares.glass.ui
 import android.app.ActivityManager
 import android.content.Context
 import android.graphics.Rect
+import android.os.Build
 import android.view.KeyEvent as AndroidKey
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
@@ -40,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur as blurEffect
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -172,7 +174,7 @@ fun HomeScreen(
         if (apps.isNotEmpty() && state.focus > apps.lastIndex) state.focus = apps.lastIndex
     }
 
-    // Recent apps: a stack of cards, opened with a double press of Home.
+    // Recent apps: a stack of cards, opened with a double press of Home or by holding Back.
     var recentIndex by remember { mutableIntStateOf(0) }
     val recentApps = Recents.list.mapNotNull { pkg -> apps.firstOrNull { it.pkg == pkg } }
     LaunchedEffect(Recents.open) {
@@ -198,7 +200,16 @@ fun HomeScreen(
     val scrollTarget = if (row == 0) 0f else (topRowY + Metrics.Pitch * row - Metrics.GridRowY).value
     val scroll = animateFloatAsState(scrollTarget, spring(dampingRatio = 1f, stiffness = 210f), label = "scroll")
     val inGrid = row > 0 || state.mode == Mode.Control
-    val blur by animateFloatAsState(if (inGrid) 1f else 0f, tween(450), label = "blur")
+    // The frosted wallpaper also fades in while the recent apps are showing.
+    val blur by animateFloatAsState(if (inGrid || Recents.open) 1f else 0f, tween(450), label = "blur")
+    // 0 -> 1 while the recent apps open: drives the blur of the home items.
+    val recentsMix by animateFloatAsState(if (Recents.open) 1f else 0f, tween(350), label = "recentsMix")
+    // Android 12+: a real blur of the home items. Older TVs: the home items just fade (see below).
+    val contentBlur = if (Build.VERSION.SDK_INT >= 31 && recentsMix > 0.01f) {
+        Modifier.blurEffect((24f * recentsMix).dp)
+    } else {
+        Modifier
+    }
     val dim by animateFloatAsState(
         if (state.mode == Mode.Control || state.mode == Mode.Menu) 0.3f else 0f, tween(250), label = "dim",
     )
@@ -502,6 +513,14 @@ fun HomeScreen(
         )
         Box(Modifier.fillMaxSize().graphicsLayer { alpha = blur }.background(Color.Black.copy(alpha = 0.22f)))
 
+        // ---- Everything on the home screen (clock, dock, apps, panels). It blurs while recents is open. ----
+        Box(
+            Modifier.fillMaxSize().then(contentBlur).graphicsLayer {
+                // Android 7-11 can't blur live: the home items just fade out instead.
+                alpha = if (Build.VERSION.SDK_INT < 31) 1f - 0.7f * recentsMix else 1f
+            },
+        ) {
+
         // Glass dock under the first row; it fades out when you move into the grid.
         val dockAlpha by animateFloatAsState(if (row == 0) 1f else 0f, tween(300), label = "dock")
         val headerAlpha by animateFloatAsState(if (row == 0) 1f else 0f, tween(300), label = "header")
@@ -647,11 +666,16 @@ fun HomeScreen(
                 ContextMenu(backdrop, focused.label, menu, state.menuIndex, Modifier)
             }
         }
-        // Recent apps: a stack of cards (double press of Home).
+
+        }
+        // ---- End of the blurred home items. ----
+
+        // Recent apps: a cascade of cards (double press of Home, or hold Back).
         val recentsAlpha by animateFloatAsState(if (Recents.open) 1f else 0f, tween(220), label = "recents")
         if (recentsAlpha > 0.01f) {
-            RecentStack(
+            RecentCards(
                 items = recentApps, selected = recentIndex, alpha = recentsAlpha, itemKey = { it.pkg },
+                label = { it.label },
             ) { entry ->
                 AppTile(
                     entry = entry,
