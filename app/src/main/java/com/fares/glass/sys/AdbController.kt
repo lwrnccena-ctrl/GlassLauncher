@@ -5,14 +5,13 @@ import android.os.Build
 import io.github.muntashirakon.adb.AbsAdbConnectionManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import sun.security.x509.*
 import java.io.File
-import java.math.BigInteger
-import java.security.*
+import java.security.KeyFactory
+import java.security.KeyPairGenerator
+import java.security.PrivateKey
 import java.security.cert.Certificate
 import java.security.cert.CertificateFactory
 import java.security.spec.PKCS8EncodedKeySpec
-import java.util.Date
 
 /** Keeps our own ADB key + certificate so pairing is only needed once. */
 class GlassAdb private constructor(private val ctx: Context) : AbsAdbConnectionManager() {
@@ -36,18 +35,7 @@ class GlassAdb private constructor(private val ctx: Context) : AbsAdbConnectionM
             } catch (_: Exception) {}
         }
         val kp = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
-        val alg = "SHA512withRSA"
-        val name = X500Name("CN=Glass")
-        val info = X509CertInfo().apply {
-            set(X509CertInfo.VERSION, CertificateVersion(CertificateVersion.V3))
-            set(X509CertInfo.SERIAL_NUMBER, CertificateSerialNumber(BigInteger.valueOf(System.nanoTime() and 0x7fffffff)))
-            set(X509CertInfo.ALGORITHM_ID, CertificateAlgorithmId(AlgorithmId.get(alg)))
-            set(X509CertInfo.SUBJECT, name)
-            set(X509CertInfo.ISSUER, name)
-            set(X509CertInfo.KEY, CertificateX509Key(kp.public))
-            set(X509CertInfo.VALIDITY, CertificateValidity(Date(), Date(System.currentTimeMillis() + 3650L * 86_400_000L)))
-        }
-        val c = X509CertImpl(info).also { it.sign(kp.private, alg) }
+        val c = CertUtil.selfSigned(kp)
         kf.writeBytes(kp.private.encoded); cf.writeBytes(c.encoded)
         priv = kp.private; cert = c
     }
