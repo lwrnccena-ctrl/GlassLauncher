@@ -134,6 +134,20 @@
                 android:resource="@xml/home_accessibility_service" />
         </service>
 
+        <!-- Recent apps previews: takes a small picture of each app you use -->
+        <service
+            android:name=".sys.GlassAccessibilityService"
+            android:exported="false"
+            android:label="Glass previews"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/glass_accessibility" />
+        </service>
+
         <!-- Now playing card: lets Glass see which media is playing -->
         <service
             android:name=".sys.MediaListener"
