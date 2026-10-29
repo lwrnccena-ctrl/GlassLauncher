@@ -6,6 +6,10 @@ This is a fork of [tlfares/GlassLauncher](https://github.com/tlfares/GlassLaunch
 
 **Download page:** https://lwrnccena-ctrl.github.io/GlassLauncher/
 
+## Screenshots
+
+![Control Center overlay on top of a video](docs/screenshots/control-center-overlay.png)
+
 ## Features
 
 - **Home:** greeting, large clock and date, a glass dock of 6 apps, and a 6-column grid below.
