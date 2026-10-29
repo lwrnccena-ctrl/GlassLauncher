@@ -68,6 +68,7 @@ object AdbController {
     const val PKG = "com.fares.glass"
     const val CMD_WRITE_SECURE = "pm grant $PKG android.permission.WRITE_SECURE_SETTINGS"
     const val CMD_MEDIA_LISTENER = "cmd notification allow_listener $PKG/$PKG.sys.MediaListener"
+    const val CMD_LOCATION = "pm grant $PKG android.permission.ACCESS_FINE_LOCATION"
 
     data class Result(val ok: Boolean, val output: String)
 
@@ -115,7 +116,10 @@ object AdbController {
         return withContext(Dispatchers.IO) {
             try {
                 GlassAdb.get(ctx).openStream("shell:$command").use { s ->
-                    Result(true, s.openInputStream().bufferedReader().readText().trim().ifEmpty { "Done" })
+                    // Commands like `pm grant` often close the stream without printing anything,
+                    // which makes readText() throw "Stream closed". The command still ran, so ignore it.
+                    val out = runCatching { s.openInputStream().bufferedReader().readText().trim() }.getOrDefault("")
+                    Result(true, out.ifEmpty { "Done" })
                 }
             } catch (t: Throwable) { Result(false, err(t)) }
         }
