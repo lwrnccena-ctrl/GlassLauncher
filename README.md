@@ -8,7 +8,15 @@ This is a fork of [tlfares/GlassLauncher](https://github.com/tlfares/GlassLaunch
 
 ## Screenshots
 
-![Control Center overlay on top of a video](docs/screenshots/control-center-overlay.png)
+![Home screen with weather and app dock](docs/screenshots/home-screen.png)
+
+| Control Center | Widgets |
+| --- | --- |
+| ![Control Center](docs/screenshots/control-center.png) | ![Widgets panel](docs/screenshots/widgets.png) |
+
+| ADB permissions | Overlay on top of a video |
+| --- | --- |
+| ![ADB permissions panel](docs/screenshots/adb-permissions.png) | ![Control Center overlay on top of a video](docs/screenshots/control-center-overlay.png) |
 
 ## Features
 
@@ -33,6 +41,9 @@ This is a fork of [tlfares/GlassLauncher](https://github.com/tlfares/GlassLaunch
 - **Recent apps:** jump back to the apps you used last.
 - **Lyrics:** song lyrics for the music that is playing.
 - **Media playback controls:** play, pause and skip from Glass without opening the music app.
+- **Widgets panel:** turn the Verse, Music, Lyrics and Weather widgets on or off from the Control Center.
+- **ADB panel:** shows whether ADB is connected and the status of the secure settings, media listener and location permissions.
+- **Auto wallpaper:** a wallpaper mode that follows the sky and weather.
 
 ## Install
 
