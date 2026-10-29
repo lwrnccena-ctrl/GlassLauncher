@@ -56,6 +56,8 @@ fun ForecastMenu(
                         i == selectedDay,
                     )
                 }
+                // After the last day: pick another city.
+                ForecastRow("Change location\u2026", "", selectedDay == days.size)
             } else {
                 day?.hours?.filter { it.hour % 3 == 0 }?.forEachIndexed { i, h ->
                     ForecastRow(
