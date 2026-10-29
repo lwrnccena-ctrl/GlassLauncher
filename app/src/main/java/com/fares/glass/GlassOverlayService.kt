@@ -58,7 +58,7 @@ import com.fares.glass.ui.ControlCenter
 import com.fares.glass.ui.Typo
 
 /**
- * Shows the Control Center over any app when the remote's menu button is pressed.
+ * Shows the Control Center over any app when a trigger button on the remote is pressed.
  * Needs to be enabled as an accessibility service (that is what lets it hear remote keys in other apps).
  */
 class GlassOverlayService : AccessibilityService() {
@@ -66,8 +66,16 @@ class GlassOverlayService : AccessibilityService() {
     companion object {
         private const val TAG = "GlassOverlay"
 
-        /** Buttons that open the overlay. Add KeyEvent.KEYCODE_SETTINGS etc. here if your remote needs it. */
-        private val TRIGGER_KEYS = setOf(KeyEvent.KEYCODE_MENU)
+        /**
+         * Buttons that open the overlay.
+         * Xiaomi remote: gear button = SETTINGS, yellow button = backup in case the TV keeps the gear for itself.
+         * Other choices: KEYCODE_PROG_RED, KEYCODE_PROG_GREEN, KEYCODE_PROG_BLUE, KEYCODE_INFO, KEYCODE_GUIDE.
+         */
+        private val TRIGGER_KEYS = setOf(
+            KeyEvent.KEYCODE_MENU,
+            KeyEvent.KEYCODE_SETTINGS,      // gear button
+            KeyEvent.KEYCODE_PROG_YELLOW,   // yellow button, backup
+        )
 
         /** Logs every remote key to logcat so you can find your button's code: adb logcat -s GlassOverlay */
         private const val LOG_KEYS = true
