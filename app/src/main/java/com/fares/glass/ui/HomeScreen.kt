@@ -39,6 +39,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -75,11 +76,13 @@ import androidx.compose.ui.unit.dp
 import com.fares.glass.R
 import com.fares.glass.data.AppEntry
 import com.fares.glass.data.AppRepository
+import com.fares.glass.data.Locator
 import com.fares.glass.data.Weather
 import com.fares.glass.gfx.Blur
 import com.fares.glass.sys.NowPlaying
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
@@ -152,6 +155,8 @@ fun HomeScreen(
     weather: Weather? = null,
     /** True while the sky wallpaper (the one with the TV) is showing: lyrics go on its TV screen. */
     tvWallpaper: Boolean = false,
+    /** A city was chosen in the city picker (null = back to the automatic location). */
+    onSetLocation: (Locator.Place?) -> Unit = {},
 ) {
     val apps = repo.apps
     val density = LocalDensity.current
@@ -177,6 +182,33 @@ fun HomeScreen(
     val forecastDays = weather
         ?.takeIf { !it.isPlaceholder && it.place.isNotBlank() && Features.weather }
         ?.days.orEmpty()
+    // City picker: type a place, choose it from the matches (or "Detect automatically").
+    val scope = rememberCoroutineScope()
+    var locOpen by remember { mutableStateOf(false) }
+    var locTyping by remember { mutableStateOf(true) }
+    var locResults by remember { mutableStateOf<List<Locator.Place>>(emptyList()) }
+    var locIndex by remember { mutableIntStateOf(0) }
+    var locStatus by remember { mutableStateOf<String?>(null) }
+    fun openLocation() {
+        locResults = emptyList()
+        locStatus = null
+        locIndex = 0
+        locTyping = true
+        locOpen = true
+    }
+    fun startSearch(query: String) {
+        if (query.isBlank()) return
+        locTyping = false
+        locStatus = "Searching\u2026"
+        locResults = emptyList()
+        locIndex = 0
+        scope.launch {
+            val found = Locator.search(query)
+            locResults = found
+            locStatus = if (found.isEmpty()) "No places found" else null
+            locIndex = if (found.isEmpty()) 0 else 1
+        }
+    }
     // The Control Center switch for the music card (and its remote control).
     val cardShown = NowPlaying.active && Features.music
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
@@ -192,6 +224,8 @@ fun HomeScreen(
     }
     // The name keyboard was closed: the remote drives the home screen again.
     LaunchedEffect(editingName) { if (!editingName) focusRequester.requestFocus() }
+    // The city picker is closed, or showing its list: the remote drives it (or the home screen) again.
+    LaunchedEffect(locOpen, locTyping) { if (!locOpen || !locTyping) focusRequester.requestFocus() }
     // The card disappeared while it was selected: go back to the apps.
     LaunchedEffect(cardShown) {
         if (!cardShown && mediaFocus >= 0) {
@@ -311,7 +345,7 @@ fun HomeScreen(
                 // The greeting is selected: Down goes back to the top buttons, Right to the weather.
                 nameFocus -> when {
                     dy > 0 -> nameFocus = false
-                    dx > 0 && forecastDays.isNotEmpty() -> { nameFocus = false; weatherFocus = true }
+                    dx > 0 && weather != null && Features.weather -> { nameFocus = false; weatherFocus = true }
                 }
                 // Up from the top buttons: the greeting (and its name).
                 dy < 0 -> nameFocus = true
@@ -333,11 +367,14 @@ fun HomeScreen(
             Mode.Browse -> launchFocused()
             Mode.Top -> when {
                 weatherFocus -> {
-                    // The forecast of the next days.
                     if (forecastDays.isNotEmpty()) {
+                        // The forecast of the next days (its last row changes the location).
                         forecastDay = 0
                         forecastHours = false
                         forecastOpen = true
+                    } else {
+                        // No forecast (location unavailable): go straight to the city picker.
+                        openLocation()
                     }
                 }
                 nameFocus -> editingName = true
@@ -444,12 +481,15 @@ fun HomeScreen(
             }
             AndroidKey.KEYCODE_DPAD_DOWN -> if (down) {
                 if (forecastHours) hourIndex = (hourIndex + 1).coerceAtMost((slots - 1).coerceAtLeast(0))
-                else forecastDay = (forecastDay + 1).coerceAtMost((forecastDays.size - 1).coerceAtLeast(0))
+                else forecastDay = (forecastDay + 1).coerceAtMost(forecastDays.size) // the last row is "Change location"
             }
             // OK on a day shows its hours; OK again goes back to the days.
             AndroidKey.KEYCODE_DPAD_CENTER, AndroidKey.KEYCODE_ENTER, AndroidKey.KEYCODE_NUMPAD_ENTER,
             AndroidKey.KEYCODE_BUTTON_A -> if (first) {
-                if (forecastHours) {
+                if (forecastDay >= forecastDays.size) {
+                    forecastOpen = false
+                    openLocation()
+                } else if (forecastHours) {
                     forecastHours = false
                 } else {
                     hourIndex = 0
@@ -461,6 +501,34 @@ fun HomeScreen(
                     if (forecastHours) forecastHours = false else forecastOpen = false
                 }
             AndroidKey.KEYCODE_DPAD_RIGHT -> if (first) forecastOpen = false
+        }
+        return true
+    }
+
+    /** Keys while the city picker is showing. */
+    fun locationKey(e: AndroidKey): Boolean {
+        if (locTyping) {
+            // The text field and the on-screen keyboard handle the keys; Back closes the picker.
+            if (e.keyCode == AndroidKey.KEYCODE_BACK) {
+                if (e.action == AndroidKey.ACTION_UP) locOpen = false
+                return true
+            }
+            return false
+        }
+        val down = e.action == AndroidKey.ACTION_DOWN
+        val first = down && e.repeatCount == 0
+        when (e.keyCode) {
+            AndroidKey.KEYCODE_DPAD_UP -> if (down) locIndex = (locIndex - 1).coerceAtLeast(0)
+            AndroidKey.KEYCODE_DPAD_DOWN -> if (down) locIndex = (locIndex + 1).coerceAtMost(locResults.size)
+            AndroidKey.KEYCODE_DPAD_CENTER, AndroidKey.KEYCODE_ENTER, AndroidKey.KEYCODE_NUMPAD_ENTER,
+            AndroidKey.KEYCODE_BUTTON_A -> if (first) {
+                // Row 0 is "Detect automatically"; the others are the matches.
+                val chosen = locResults.getOrNull(locIndex - 1)
+                locOpen = false
+                onSetLocation(chosen)
+            }
+            AndroidKey.KEYCODE_BACK, AndroidKey.KEYCODE_DPAD_LEFT, AndroidKey.KEYCODE_MENU ->
+                if (first) locTyping = true
         }
         return true
     }
@@ -496,6 +564,7 @@ fun HomeScreen(
             }
             return false
         }
+        if (locOpen) return locationKey(e)
         if (inputOpen) return inputKey(e)
         if (forecastOpen && forecastDays.isNotEmpty()) return forecastKey(e)
         if (state.mode == Mode.Control) return cc.onKey(e)
@@ -807,6 +876,12 @@ fun HomeScreen(
                 backdrop, forecastDays, forecastDay, forecastHours, hourIndex,
                 Modifier.align(Alignment.TopStart).padding(start = Metrics.Margin + 240.dp, top = 96.dp),
             )
+        }
+        // The city picker.
+        if (locOpen) {
+            LocationDialog(backdrop, locTyping, locResults.map { it.label }, locIndex, locStatus) { query ->
+                startSearch(query)
+            }
         }
         // The name after the greeting.
         if (editingName) {
