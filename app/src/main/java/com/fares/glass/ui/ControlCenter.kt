@@ -50,6 +50,7 @@ import androidx.compose.material.icons.rounded.BrightnessHigh
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.Computer
+import androidx.compose.material.icons.rounded.Dashboard
 import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.Info
@@ -125,7 +126,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.util.Locale
 
-enum class CcPage { Main, Wifi, Bluetooth, Adb }
+enum class CcPage { Main, Wifi, Bluetooth, Adb, Widgets }
 
 /** Narrow, tall sheet, like the tvOS Control Center. */
 val PanelWidth = 300.dp
@@ -139,15 +140,27 @@ private val Orange = Color(0xFFFF9F0A)
 private val Purple = Color(0xFFBF5AF2)
 
 /**
- * Selection numbers on the main page:
- * 0-5 module tiles, 6 brightness, 7 volume, 8-11 on/off switches (verse, music, lyrics, weather), 12+ round shortcuts.
+ * Selection numbers on the main page (the numbers 0-5 match the order of the list in tiles()):
+ *
+ *   Wi-Fi       | Bluetooth
+ *   Top Shelf   | brightness + volume (two vertical sliders, two rows tall)
+ *   Hidden apps | (same sliders)
+ *   Wallpaper   | Animations
+ *   [ wide Widgets tile, icon only ]
+ *   round shortcuts
+ *
  * ADB_BTN is the round ADB button at the top right, next to the clock.
  */
+private const val WIFI = 0
+private const val ANIMATIONS = 1
+private const val TOP_SHELF = 2
+private const val HIDDEN = 3
+private const val BLUETOOTH = 4
+private const val WALLPAPER = 5
 private const val BRIGHTNESS = 6
 private const val VOLUME = 7
-private const val FIRST_SWITCH = 8
-private const val SWITCHES = 4
-private const val FIRST_SHORTCUT = FIRST_SWITCH + SWITCHES
+private const val WIDGETS = 8
+private const val FIRST_SHORTCUT = 9
 private const val ADB_BTN = 100
 
 private val SunYellow = Color(0xFFFFD60A)
@@ -171,6 +184,10 @@ private sealed interface Line {
 }
 
 private class Tile(val icon: ImageVector, val title: String, val status: String, val active: Boolean, val accent: Color)
+
+/** One tile of the Widgets page (second control center). */
+private class WidgetItem(val icon: ImageVector, val title: String, val on: Boolean)
+
 private val Section.icon: ImageVector
     get() = when (this) {
         Section.Display -> Icons.Rounded.Tv
@@ -183,8 +200,9 @@ private val Section.icon: ImageVector
     }
 
 /**
- * tvOS-style Control Center: a grid of modules, a System module, round shortcuts, and Wi-Fi /
- * Bluetooth / ADB pages that slide inside the panel. All remote navigation for it lives here.
+ * tvOS-style Control Center: a grid of modules, a Widgets tile that opens a second page, round
+ * shortcuts, and Wi-Fi / Bluetooth / ADB / Widgets pages that slide inside the panel.
+ * All remote navigation for it lives here.
  */
 class ControlCenter(
     private val context: Context,
@@ -209,6 +227,8 @@ class ControlCenter(
 
     var page by mutableStateOf(CcPage.Main)
     var index by mutableIntStateOf(0)
+    /** Selected tile on the Widgets page: 0 verse, 1 music, 2 lyrics, 3 weather. */
+    var widgetIndex by mutableIntStateOf(0)
     /** Selected item on a detail page, identified by its key. */
     var rowKey by mutableStateOf("toggle")
     /** Network whose password is being typed (the on-screen keyboard is open). */
@@ -265,7 +285,14 @@ class ControlCenter(
 
     fun open(target: CcPage) {
         page = target
-        index = when (target) { CcPage.Wifi -> 0; CcPage.Bluetooth -> 4; CcPage.Main -> 0; CcPage.Adb -> 0 }
+        index = when (target) {
+            CcPage.Wifi -> 0
+            CcPage.Bluetooth -> BLUETOOTH
+            CcPage.Main -> 0
+            CcPage.Adb -> 0
+            CcPage.Widgets -> 0
+        }
+        widgetIndex = 0
         rowKey = "toggle"
         wifi.start()
         bt.start()
@@ -392,18 +419,15 @@ class ControlCenter(
 
     private fun selectMain() {
         when (index) {
-            0 -> { page = CcPage.Wifi; rowKey = "toggle"; askPermissions(); wifi.scan() }
-            1 -> { sys.cycleAnimations(); tick++ }
-            2 -> repo.toggleTopShelf()
-            3 -> repo.unhideAll()
-            4 -> { page = CcPage.Bluetooth; rowKey = "toggle"; askPermissions() }
-            5 -> onNextWallpaper()
-            BRIGHTNESS -> Unit // Left / Right change it
+            WIFI -> { page = CcPage.Wifi; rowKey = "toggle"; askPermissions(); wifi.scan() }
+            ANIMATIONS -> { sys.cycleAnimations(); tick++ }
+            TOP_SHELF -> repo.toggleTopShelf()
+            HIDDEN -> repo.unhideAll()
+            BLUETOOTH -> { page = CcPage.Bluetooth; rowKey = "toggle"; askPermissions() }
+            WALLPAPER -> onNextWallpaper()
+            BRIGHTNESS -> Unit // Up / Down change it
             VOLUME -> levels.toggleMute()
-            FIRST_SWITCH -> Features.toggleVerse()
-            FIRST_SWITCH + 1 -> Features.toggleMusic()
-            FIRST_SWITCH + 2 -> Features.toggleLyrics()
-            FIRST_SWITCH + 3 -> Features.toggleWeather()
+            WIDGETS -> { page = CcPage.Widgets; widgetIndex = 0 }
             ADB_BTN -> openAdb()
             else -> open(shortcuts[index - FIRST_SHORTCUT])
         }
@@ -413,44 +437,95 @@ class ControlCenter(
         val i = index
         // The ADB button sits above the first row of tiles.
         if (i == ADB_BTN) {
-            if (dy > 0) index = 1 else if (dx < 0) index = 0
+            if (dy > 0) index = BLUETOOTH else if (dx < 0) index = WIFI
             return
         }
-        // On the two sliders Left / Right change the value.
-        if (dx != 0 && i == BRIGHTNESS) { levels.adjustBrightness(dx); return }
-        if (dx != 0 && i == VOLUME) { levels.adjustVolume(dx); return }
-        index = when {
-            i < BRIGHTNESS -> when {
-                dx < 0 && i % 2 == 1 -> i - 1
-                dx > 0 && i % 2 == 0 -> i + 1
-                dy > 0 -> if (i < 4) i + 2 else BRIGHTNESS
-                dy < 0 && i >= 2 -> i - 2
-                dy < 0 && i < 2 -> ADB_BTN
+        // The two sliders are vertical now: Up / Down change the value, Left / Right move the selection.
+        if (dy != 0 && i == BRIGHTNESS) { levels.adjustBrightness(-dy); return }
+        if (dy != 0 && i == VOLUME) { levels.adjustVolume(-dy); return }
+        index = when (i) {
+            WIFI -> when {
+                dx > 0 -> BLUETOOTH
+                dy > 0 -> TOP_SHELF
+                dy < 0 -> ADB_BTN
                 else -> i
             }
-            i == BRIGHTNESS -> when {
-                dy < 0 -> 4
-                dy > 0 -> VOLUME
+            BLUETOOTH -> when {
+                dx < 0 -> WIFI
+                dy > 0 -> BRIGHTNESS
+                dy < 0 -> ADB_BTN
                 else -> i
             }
-            i == VOLUME -> when {
-                dy < 0 -> BRIGHTNESS
-                dy > 0 -> FIRST_SWITCH
+            TOP_SHELF -> when {
+                dx > 0 -> BRIGHTNESS
+                dy < 0 -> WIFI
+                dy > 0 -> HIDDEN
                 else -> i
             }
-            i < FIRST_SHORTCUT -> when {
-                dx < 0 && i > FIRST_SWITCH -> i - 1
-                dx > 0 && i < FIRST_SHORTCUT - 1 -> i + 1
+            HIDDEN -> when {
+                dx > 0 -> BRIGHTNESS
+                dy < 0 -> TOP_SHELF
+                dy > 0 -> WALLPAPER
+                else -> i
+            }
+            BRIGHTNESS -> when {
+                dx < 0 -> TOP_SHELF
+                dx > 0 -> VOLUME
+                else -> i
+            }
+            VOLUME -> if (dx < 0) BRIGHTNESS else i
+            WALLPAPER -> when {
+                dx > 0 -> ANIMATIONS
+                dy < 0 -> HIDDEN
+                dy > 0 -> WIDGETS
+                else -> i
+            }
+            ANIMATIONS -> when {
+                dx < 0 -> WALLPAPER
                 dy < 0 -> VOLUME
-                dy > 0 -> FIRST_SHORTCUT + (i - FIRST_SWITCH).coerceAtMost(shortcuts.lastIndex)
+                dy > 0 -> WIDGETS
+                else -> i
+            }
+            WIDGETS -> when {
+                dy < 0 -> WALLPAPER
+                dy > 0 -> FIRST_SHORTCUT + (shortcuts.size / 2).coerceAtMost(shortcuts.lastIndex)
                 else -> i
             }
             else -> when {
                 dx < 0 && i > FIRST_SHORTCUT -> i - 1
                 dx > 0 && i < FIRST_SHORTCUT + shortcuts.lastIndex -> i + 1
-                dy < 0 -> FIRST_SWITCH + (i - FIRST_SHORTCUT).coerceAtMost(SWITCHES - 1)
+                dy < 0 -> WIDGETS
                 else -> i
             }
+        }
+    }
+
+    // ---- Widgets page (second control center) ----
+
+    private fun widgetItems() = listOf(
+        WidgetItem(Icons.Rounded.MenuBook, "Verse", Features.verse),
+        WidgetItem(Icons.Rounded.MusicNote, "Music", Features.music),
+        WidgetItem(Icons.Rounded.Subtitles, "Lyrics", Features.lyrics),
+        WidgetItem(Icons.Rounded.WbSunny, "Weather", Features.weather),
+    )
+
+    private fun selectWidget() {
+        when (widgetIndex) {
+            0 -> Features.toggleVerse()
+            1 -> Features.toggleMusic()
+            2 -> Features.toggleLyrics()
+            3 -> Features.toggleWeather()
+        }
+    }
+
+    /** 2x2 grid. Left from the left column goes back to the main page. */
+    private fun moveWidgets(dx: Int, dy: Int) {
+        val col = widgetIndex % 2
+        when {
+            dx < 0 -> if (col == 0) page = CcPage.Main else widgetIndex -= 1
+            dx > 0 && col == 0 -> widgetIndex += 1
+            dy > 0 && widgetIndex < 2 -> widgetIndex += 2
+            dy < 0 && widgetIndex >= 2 -> widgetIndex -= 2
         }
     }
 
@@ -458,6 +533,7 @@ class ControlCenter(
 
     private fun rows(): List<Line> = when (page) {
         CcPage.Main -> emptyList()
+        CcPage.Widgets -> emptyList()
         CcPage.Wifi -> buildList {
             add(Line.Toggle("Wi-Fi", wifi.enabled))
             if (wifi.enabled) {
@@ -602,14 +678,23 @@ class ControlCenter(
         }
         when (e.keyCode) {
             AndroidKey.KEYCODE_DPAD_CENTER, AndroidKey.KEYCODE_ENTER, AndroidKey.KEYCODE_NUMPAD_ENTER ->
-                if (e.repeatCount == 0) { if (page == CcPage.Main) selectMain() else selectDetail() }
+                if (e.repeatCount == 0) {
+                    when (page) {
+                        CcPage.Main -> selectMain()
+                        CcPage.Widgets -> selectWidget()
+                        else -> selectDetail()
+                    }
+                }
             AndroidKey.KEYCODE_BACK -> if (e.repeatCount == 0) {
                 if (page == CcPage.Main) close() else { page = CcPage.Main; forgetArmed = null }
             }
             AndroidKey.KEYCODE_MENU -> if (e.repeatCount == 0) close()
             else -> if (dx != 0 || dy != 0) {
-                if (page == CcPage.Main) moveMain(dx, dy)
-                else if (dx < 0) { page = CcPage.Main; forgetArmed = null } else if (dy != 0) moveDetail(dy)
+                when (page) {
+                    CcPage.Main -> moveMain(dx, dy)
+                    CcPage.Widgets -> moveWidgets(dx, dy)
+                    else -> if (dx < 0) { page = CcPage.Main; forgetArmed = null } else if (dy != 0) moveDetail(dy)
+                }
             }
         }
         return true
@@ -630,7 +715,11 @@ class ControlCenter(
                 label = "ccPage",
             ) { p ->
                 Box(Modifier.fillMaxSize().padding(16.dp)) {
-                    if (p == CcPage.Main) MainPage(wallpaperName) else DetailPage(p)
+                    when (p) {
+                        CcPage.Main -> MainPage(wallpaperName)
+                        CcPage.Widgets -> WidgetsPage()
+                        else -> DetailPage(p)
+                    }
                 }
             }
         }
@@ -650,34 +739,47 @@ class ControlCenter(
                 RoundButton(Icons.Rounded.Terminal, index == ADB_BTN)
             }
             Spacer(Modifier.height(8.dp))
-            for (r in 0 until 3) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (c in 0 until 2) {
-                        val i = r * 2 + c
-                        ModuleTile(tiles[i], index == i, Modifier.weight(1f))
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-            }
-            // Brightness and volume: Left / Right change them, OK on the volume mutes.
-            LevelSlider(
-                Icons.Rounded.BrightnessHigh, SunYellow, levels.brightness,
-                if (levels.canSetBrightness) null else "No access", index == BRIGHTNESS,
-            )
-            Spacer(Modifier.height(6.dp))
-            LevelSlider(
-                if (levels.volume == 0) Icons.Rounded.VolumeOff else Icons.Rounded.VolumeUp,
-                WifiBlue, levels.volume, null, index == VOLUME,
-            )
-            Spacer(Modifier.weight(1f))
-            // On/off switches: Bible verse, music card (playback control), lyrics and weather.
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                SwitchTile(Icons.Rounded.MenuBook, "Verse", Features.verse, index == FIRST_SWITCH, Modifier.weight(1f))
-                SwitchTile(Icons.Rounded.MusicNote, "Music", Features.music, index == FIRST_SWITCH + 1, Modifier.weight(1f))
-                SwitchTile(Icons.Rounded.Subtitles, "Lyrics", Features.lyrics, index == FIRST_SWITCH + 2, Modifier.weight(1f))
-                SwitchTile(Icons.Rounded.WbSunny, "Weather", Features.weather, index == FIRST_SWITCH + 3, Modifier.weight(1f))
+
+            // Row 1: Wi-Fi | Bluetooth
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ModuleTile(tiles[WIFI], index == WIFI, Modifier.weight(1f))
+                ModuleTile(tiles[BLUETOOTH], index == BLUETOOTH, Modifier.weight(1f))
             }
             Spacer(Modifier.height(8.dp))
+
+            // Rows 2-3: Top Shelf / Hidden apps on the left, two vertical sliders on the right.
+            Row(Modifier.fillMaxWidth().height(TileHeight * 2 + 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ModuleTile(tiles[TOP_SHELF], index == TOP_SHELF, Modifier.fillMaxWidth())
+                    ModuleTile(tiles[HIDDEN], index == HIDDEN, Modifier.fillMaxWidth())
+                }
+                // Up / Down change the level, OK on the volume mutes.
+                Row(Modifier.weight(1f).fillMaxHeight(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    VerticalLevelSlider(
+                        Icons.Rounded.BrightnessHigh, SunYellow, levels.brightness,
+                        if (levels.canSetBrightness) null else "No access", index == BRIGHTNESS,
+                        Modifier.weight(1f),
+                    )
+                    VerticalLevelSlider(
+                        if (levels.volume == 0) Icons.Rounded.VolumeOff else Icons.Rounded.VolumeUp,
+                        WifiBlue, levels.volume, null, index == VOLUME,
+                        Modifier.weight(1f),
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+
+            // Row 4: Wallpaper | Animations
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ModuleTile(tiles[WALLPAPER], index == WALLPAPER, Modifier.weight(1f))
+                ModuleTile(tiles[ANIMATIONS], index == ANIMATIONS, Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(8.dp))
+
+            // One wide tile, icon only: opens the Widgets page (verse, music, lyrics, weather).
+            WideIconTile(Icons.Rounded.Dashboard, index == WIDGETS)
+
+            Spacer(Modifier.weight(1f))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 shortcuts.forEachIndexed { k, s -> RoundButton(s.icon, index == FIRST_SHORTCUT + k) }
             }
@@ -685,6 +787,7 @@ class ControlCenter(
             BasicText(
                 when {
                     index == ADB_BTN -> "ADB"
+                    index == WIDGETS -> "Widgets"
                     index >= FIRST_SHORTCUT -> str(shortcuts[index - FIRST_SHORTCUT].title)
                     else -> " "
                 },
@@ -704,7 +807,7 @@ class ControlCenter(
         val fg = lerp(White, Ink, f)
         Column(
             modifier
-                .height(64.dp)
+                .height(TileHeight)
                 .graphicsLayer { scaleX = 1f + 0.06f * f; scaleY = 1f + 0.06f * f }
                 .background(lerp(White.copy(alpha = 0.10f), White.copy(alpha = 0.95f), f), RoundedCornerShape(24.dp))
                 .padding(horizontal = 11.dp, vertical = 5.dp),
@@ -726,68 +829,55 @@ class ControlCenter(
         }
     }
 
-    /** Small on/off tile: the icon turns green when the feature is on, grey when it is off. */
+    /** Wide tile with only an icon and no text. */
     @Composable
-    private fun SwitchTile(icon: ImageVector, title: String, on: Boolean, focused: Boolean, modifier: Modifier) {
+    private fun WideIconTile(icon: ImageVector, focused: Boolean) {
         val f = focusAmount(focused)
-        val fg = lerp(White, Ink, f)
-        Column(
-            modifier
-                .height(44.dp)
-                .graphicsLayer { scaleX = 1f + 0.06f * f; scaleY = 1f + 0.06f * f }
-                .background(lerp(White.copy(alpha = 0.10f), White.copy(alpha = 0.95f), f), RoundedCornerShape(18.dp))
-                .padding(horizontal = 4.dp, vertical = 4.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            Box(
-                Modifier.size(20.dp).clip(CircleShape).background(
-                    if (on) Green else lerp(White.copy(alpha = 0.16f), Ink.copy(alpha = 0.08f), f),
-                ),
-                contentAlignment = Alignment.Center,
-            ) {
-                Image(rememberVectorPainter(icon), null, Modifier.size(12.dp),
-                    colorFilter = ColorFilter.tint(if (on) White else fg))
-            }
-            Spacer(Modifier.height(2.dp))
-            BasicText(
-                title,
-                style = txt(if (on) fg else fg.copy(alpha = 0.55f), 10.sp, FontWeight.SemiBold),
-                maxLines = 1,
-            )
-        }
-    }
-
-    /** Pill slider (brightness, volume): the white part is the level. Left / Right change it. */
-    @Composable
-    private fun LevelSlider(icon: ImageVector, tint: Color, percent: Int, note: String?, focused: Boolean) {
-        val f = focusAmount(focused)
-        val fill by animateFloatAsState(percent / 100f, tween(120), label = "levelFill")
-        val shape = RoundedCornerShape(16.dp)
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(32.dp)
-                .graphicsLayer { scaleX = 1f + 0.03f * f; scaleY = 1f + 0.03f * f }
+                .height(48.dp)
+                .graphicsLayer { scaleX = 1f + 0.04f * f; scaleY = 1f + 0.04f * f }
+                .background(lerp(White.copy(alpha = 0.10f), White.copy(alpha = 0.95f), f), RoundedCornerShape(24.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(rememberVectorPainter(icon), null, Modifier.size(24.dp), colorFilter = ColorFilter.tint(lerp(White, Ink, f)))
+        }
+    }
+
+    /**
+     * Vertical pill slider (brightness, volume): the white part rises from the bottom, the percent
+     * sits at the top and the icon at the bottom. Up / Down change it.
+     */
+    @Composable
+    private fun VerticalLevelSlider(
+        icon: ImageVector, tint: Color, percent: Int, note: String?, focused: Boolean, modifier: Modifier,
+    ) {
+        val f = focusAmount(focused)
+        val fill by animateFloatAsState(percent / 100f, tween(120), label = "levelFill")
+        val shape = RoundedCornerShape(24.dp)
+        Box(
+            modifier
+                .fillMaxHeight()
+                .graphicsLayer { scaleX = 1f + 0.04f * f; scaleY = 1f + 0.03f * f }
                 .clip(shape)
                 .background(lerp(White.copy(alpha = 0.12f), White.copy(alpha = 0.22f), f))
                 .border(2.dp, White.copy(alpha = 0.9f * f), shape),
         ) {
             Box(
                 Modifier
-                    .fillMaxHeight()
-                    .fillMaxWidth(fill.coerceIn(0f, 1f))
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .fillMaxHeight(fill.coerceIn(0f, 1f))
                     .background(lerp(White.copy(alpha = 0.78f), White, f)),
             )
-            Row(Modifier.fillMaxSize().padding(horizontal = 11.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(icon, tint, 16)
-                Spacer(Modifier.weight(1f))
-                BasicText(
-                    note ?: "$percent%",
-                    style = txt(if (note == null && fill > 0.9f) Ink else White, 11.sp, FontWeight.SemiBold),
-                    maxLines = 1,
-                )
-            }
+            BasicText(
+                note ?: "$percent%",
+                Modifier.align(Alignment.TopCenter).padding(top = 10.dp),
+                style = txt(White, 11.sp, FontWeight.SemiBold).copy(textAlign = androidx.compose.ui.text.style.TextAlign.Center),
+                maxLines = 1,
+            )
+            Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp)) { Icon(icon, tint, 18) }
         }
     }
 
@@ -803,6 +893,58 @@ class ControlCenter(
             contentAlignment = Alignment.Center,
         ) {
             Image(rememberVectorPainter(icon), null, Modifier.size(20.dp), colorFilter = ColorFilter.tint(lerp(White, Ink, f)))
+        }
+    }
+
+    // ---- Widgets page (second control center) ----
+
+    @Composable
+    private fun WidgetsPage() {
+        val items = widgetItems()
+        Column(Modifier.fillMaxSize()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Image(rememberVectorPainter(Icons.Rounded.ChevronLeft), null, Modifier.size(26.dp), colorFilter = ColorFilter.tint(White.copy(alpha = 0.7f)))
+                BasicText("Widgets", style = txt(White, 24.sp, FontWeight.Bold))
+            }
+            Spacer(Modifier.height(12.dp))
+            for (r in 0 until 2) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (c in 0 until 2) {
+                        val i = r * 2 + c
+                        WidgetTile(items[i], widgetIndex == i, Modifier.weight(1f))
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+        }
+    }
+
+    /** Big on/off tile: the icon circle turns green when the widget is on, grey when it is off. */
+    @Composable
+    private fun WidgetTile(w: WidgetItem, focused: Boolean, modifier: Modifier) {
+        val f = focusAmount(focused)
+        val fg = lerp(White, Ink, f)
+        Column(
+            modifier
+                .height(112.dp)
+                .graphicsLayer { scaleX = 1f + 0.05f * f; scaleY = 1f + 0.05f * f }
+                .background(lerp(White.copy(alpha = 0.10f), White.copy(alpha = 0.95f), f), RoundedCornerShape(26.dp))
+                .padding(12.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Box(
+                Modifier.size(34.dp).clip(CircleShape).background(
+                    if (w.on) Green else lerp(White.copy(alpha = 0.16f), Ink.copy(alpha = 0.08f), f),
+                ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(rememberVectorPainter(w.icon), null, Modifier.size(20.dp),
+                    colorFilter = ColorFilter.tint(if (w.on) White else fg))
+            }
+            Column {
+                BasicText(w.title, style = txt(fg, 15.sp, FontWeight.SemiBold), maxLines = 1)
+                BasicText(if (w.on) "On" else "Off", style = txt(fg.copy(alpha = 0.6f), 12.sp, FontWeight.Medium), maxLines = 1)
+            }
         }
     }
 
@@ -1001,3 +1143,6 @@ class ControlCenter(
         }
     }
 }
+
+/** Height of one module tile; the two-row slider block is twice this plus the 8dp gap. */
+private val TileHeight = 64.dp
