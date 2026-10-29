@@ -54,6 +54,11 @@ import java.util.TimeZone
 
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        /** True while the launcher is on screen. The overlay service uses it to stay out of the way. */
+        @Volatile var isForeground = false
+    }
+
     private lateinit var repo: AppRepository
     private val home = HomeState()
     private val backdrop = Backdrop()
@@ -158,11 +163,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        isForeground = true
+        // Closes the overlay over other apps when the launcher comes back (for example Home pressed).
+        GlassOverlayService.dismiss()
         lifecycleScope.launch { repo.refresh() }
     }
 
     override fun onPause() {
         super.onPause()
+        isForeground = false
         if (home.mode == Mode.Control) cc.close()
     }
 
