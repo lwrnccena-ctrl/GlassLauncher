@@ -103,6 +103,17 @@ private val DockHeight = Metrics.TileH + 36.dp
 /** Top padding of the greeting column. */
 private val HeaderTop = 30.dp
 
+/** A white outline around something that is selected (it does not change the layout). */
+private fun Modifier.focusOutline(on: Boolean): Modifier = if (!on) this else drawBehind {
+    drawRoundRect(
+        color = Color.White,
+        topLeft = Offset(-10.dp.toPx(), -6.dp.toPx()),
+        size = Size(size.width + 20.dp.toPx(), size.height + 12.dp.toPx()),
+        cornerRadius = CornerRadius(16.dp.toPx()),
+        style = Stroke(2.dp.toPx()),
+    )
+}
+
 /** Shrinks its content (it never enlarges it) so that it fits the space it is given. */
 @Composable
 private fun FitScale(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
@@ -157,6 +168,15 @@ fun HomeScreen(
     var inputOpen by remember { mutableStateOf(false) }
     var inputIndex by remember { mutableIntStateOf(0) }
     var inputs by remember { mutableStateOf<List<InputSources.Source>>(emptyList()) }
+    // Weather: Up to the greeting, then Right selects the weather text; OK opens the forecast of the next days.
+    var weatherFocus by remember { mutableStateOf(false) }
+    var forecastOpen by remember { mutableStateOf(false) }
+    var forecastDay by remember { mutableIntStateOf(0) }
+    var forecastHours by remember { mutableStateOf(false) }
+    var hourIndex by remember { mutableIntStateOf(0) }
+    val forecastDays = weather
+        ?.takeIf { !it.isPlaceholder && it.place.isNotBlank() && Features.weather }
+        ?.days.orEmpty()
     // The Control Center switch for the music card (and its remote control).
     val cardShown = NowPlaying.active && Features.music
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
@@ -167,6 +187,7 @@ fun HomeScreen(
         if (state.mode != Mode.Top) {
             mediaFocus = -1
             nameFocus = false
+            weatherFocus = false
         }
     }
     // The name keyboard was closed: the remote drives the home screen again.
@@ -282,8 +303,16 @@ fun HomeScreen(
                 state.bump(dx, dy)
             }
             Mode.Top -> when {
-                // The greeting is selected: Down goes back to the top buttons.
-                nameFocus -> if (dy > 0) nameFocus = false
+                // The weather is selected: Down goes back to the top buttons, Left to the greeting.
+                weatherFocus -> when {
+                    dy > 0 -> weatherFocus = false
+                    dx < 0 -> { weatherFocus = false; nameFocus = true }
+                }
+                // The greeting is selected: Down goes back to the top buttons, Right to the weather.
+                nameFocus -> when {
+                    dy > 0 -> nameFocus = false
+                    dx > 0 && forecastDays.isNotEmpty() -> { nameFocus = false; weatherFocus = true }
+                }
                 // Up from the top buttons: the greeting (and its name).
                 dy < 0 -> nameFocus = true
                 // Down from the top buttons: the now playing card if it is showing, otherwise the apps.
@@ -303,6 +332,14 @@ fun HomeScreen(
         when (state.mode) {
             Mode.Browse -> launchFocused()
             Mode.Top -> when {
+                weatherFocus -> {
+                    // The forecast of the next days.
+                    if (forecastDays.isNotEmpty()) {
+                        forecastDay = 0
+                        forecastHours = false
+                        forecastOpen = true
+                    }
+                }
                 nameFocus -> editingName = true
                 state.topIndex == 2 -> {
                     // TV input: a short list of the TV's inputs.
@@ -395,6 +432,39 @@ fun HomeScreen(
         return true
     }
 
+    /** Keys while the forecast list is showing. */
+    fun forecastKey(e: AndroidKey): Boolean {
+        val down = e.action == AndroidKey.ACTION_DOWN
+        val first = down && e.repeatCount == 0
+        val slots = forecastDays.getOrNull(forecastDay)?.hours?.count { it.hour % 3 == 0 } ?: 0
+        when (e.keyCode) {
+            AndroidKey.KEYCODE_DPAD_UP -> if (down) {
+                if (forecastHours) hourIndex = (hourIndex - 1).coerceAtLeast(0)
+                else forecastDay = (forecastDay - 1).coerceAtLeast(0)
+            }
+            AndroidKey.KEYCODE_DPAD_DOWN -> if (down) {
+                if (forecastHours) hourIndex = (hourIndex + 1).coerceAtMost((slots - 1).coerceAtLeast(0))
+                else forecastDay = (forecastDay + 1).coerceAtMost((forecastDays.size - 1).coerceAtLeast(0))
+            }
+            // OK on a day shows its hours; OK again goes back to the days.
+            AndroidKey.KEYCODE_DPAD_CENTER, AndroidKey.KEYCODE_ENTER, AndroidKey.KEYCODE_NUMPAD_ENTER,
+            AndroidKey.KEYCODE_BUTTON_A -> if (first) {
+                if (forecastHours) {
+                    forecastHours = false
+                } else {
+                    hourIndex = 0
+                    forecastHours = true
+                }
+            }
+            AndroidKey.KEYCODE_BACK, AndroidKey.KEYCODE_DPAD_LEFT, AndroidKey.KEYCODE_MENU ->
+                if (first) {
+                    if (forecastHours) forecastHours = false else forecastOpen = false
+                }
+            AndroidKey.KEYCODE_DPAD_RIGHT -> if (first) forecastOpen = false
+        }
+        return true
+    }
+
     /** Keys while the list of TV inputs is showing. */
     fun inputKey(e: AndroidKey): Boolean {
         val down = e.action == AndroidKey.ACTION_DOWN
@@ -427,6 +497,7 @@ fun HomeScreen(
             return false
         }
         if (inputOpen) return inputKey(e)
+        if (forecastOpen && forecastDays.isNotEmpty()) return forecastKey(e)
         if (state.mode == Mode.Control) return cc.onKey(e)
         val down = e.action == AndroidKey.ACTION_DOWN
 
@@ -581,24 +652,13 @@ fun HomeScreen(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         // The greeting is outlined while it is selected (Up from the top buttons).
-                        Box(
-                            Modifier.drawBehind {
-                                if (nameFocus) {
-                                    drawRoundRect(
-                                        color = Color.White,
-                                        topLeft = Offset(-10.dp.toPx(), -6.dp.toPx()),
-                                        size = Size(size.width + 20.dp.toPx(), size.height + 12.dp.toPx()),
-                                        cornerRadius = CornerRadius(16.dp.toPx()),
-                                        style = Stroke(2.dp.toPx()),
-                                    )
-                                }
-                            },
-                        ) {
+                        Box(Modifier.focusOutline(nameFocus)) {
                             HomeHeader(repo.userName, Modifier)
                         }
                         if (weather != null && Features.weather) {
                             Spacer(Modifier.width(28.dp))
-                            WeatherWidget(weather)
+                            // The weather text is outlined while it is selected (Right from the greeting).
+                            Box(Modifier.focusOutline(weatherFocus)) { WeatherWidget(weather) }
                         }
                     }
                     if (Features.verse) {
@@ -616,7 +676,7 @@ fun HomeScreen(
                 if (state.mode != Mode.Control) {
                     IconBar(
                         backdrop,
-                        if (state.mode == Mode.Top && mediaFocus < 0 && !nameFocus) state.topIndex else -1,
+                        if (state.mode == Mode.Top && mediaFocus < 0 && !nameFocus && !weatherFocus) state.topIndex else -1,
                         Modifier.align(Alignment.TopEnd).padding(top = 34.dp, end = Metrics.Margin).graphicsLayer { alpha = headerAlpha },
                     )
                     // Now playing: visible while a music app is running (playing or paused).
@@ -739,6 +799,13 @@ fun HomeScreen(
             InputPicker(
                 backdrop, inputs.map { it.label }, inputIndex,
                 Modifier.align(Alignment.TopEnd).padding(top = 84.dp, end = Metrics.Margin),
+            )
+        }
+        // Forecast of the next days, under the weather text.
+        if (forecastOpen && forecastDays.isNotEmpty()) {
+            ForecastMenu(
+                backdrop, forecastDays, forecastDay, forecastHours, hourIndex,
+                Modifier.align(Alignment.TopStart).padding(start = Metrics.Margin + 240.dp, top = 96.dp),
             )
         }
         // The name after the greeting.
