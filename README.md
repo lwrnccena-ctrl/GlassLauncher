@@ -18,7 +18,7 @@ This is a fork of [tlfares/GlassLauncher](https://github.com/tlfares/GlassLaunch
 
 | ADB permissions | Overlay on top of a video |
 | --- | --- |
-| ![ADB permissions panel](docs/screenshots/adb-permissions.png) | ![Control Center overlay on top of a video](docs/screenshots/control-center-overlay.png) |
+| ![ADB permissions panel](docs/screenshots/adb-permissions.png) | ![Control Center overlay on top of an app](docs/screenshots/control-center-overlay.png) |
 
 ## Features
 
