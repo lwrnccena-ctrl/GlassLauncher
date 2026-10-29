@@ -291,6 +291,9 @@ class ControlCenter(
         (Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners") ?: "")
             .contains(context.packageName)
 
+    private fun adbLocation() =
+        context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
     private fun openAdb() {
         page = CcPage.Adb
         rowKey = "action:connect"
@@ -488,10 +491,12 @@ class ControlCenter(
             @Suppress("UNUSED_EXPRESSION") adbTick
             val secure = adbSecure()
             val listener = adbListener()
+            val location = adbLocation()
             add(Line.Action(if (adbConnected) "ADB connected" else "Connect", Icons.Rounded.Terminal, "connect"))
             add(Line.Header("Permissions"))
             add(Line.Cmd("secure", "Secure settings", if (secure) "Granted" else "OK to grant", secure))
             add(Line.Cmd("listener", "Media listener", if (listener) "Allowed" else "OK to allow", listener))
+            add(Line.Cmd("location", "Location", if (location) "Granted" else "OK to grant", location))
             if (adbStatus.isNotEmpty()) add(Line.Note(adbStatus))
         }
     }
@@ -557,6 +562,7 @@ class ControlCenter(
             is Line.Cmd -> when (r.id) {
                 "secure" -> adbRun(AdbController.CMD_WRITE_SECURE)
                 "listener" -> adbRun(AdbController.CMD_MEDIA_LISTENER)
+                "location" -> adbRun(AdbController.CMD_LOCATION)
             }
             is Line.Link -> open(r.section)
             else -> Unit
