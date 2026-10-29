@@ -27,6 +27,8 @@ import androidx.compose.ui.unit.Density
 import androidx.lifecycle.lifecycleScope
 import com.fares.glass.data.AppEntry
 import com.fares.glass.data.AppRepository
+import com.fares.glass.data.Locator
+import com.fares.glass.data.WifiLocator
 import com.fares.glass.data.Weather
 import com.fares.glass.data.WeatherRepository
 import com.fares.glass.gfx.Blur
@@ -48,6 +50,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.TimeZone
 
 class MainActivity : ComponentActivity() {
 
@@ -70,6 +73,14 @@ class MainActivity : ComponentActivity() {
     private var weather: Weather? = null
     private var lat = WeatherRepository.DEFAULT_LAT
     private var lon = WeatherRepository.DEFAULT_LON
+    // The location is found automatically: first from the Wi-Fi networks around (data/WifiLocator.kt), then from
+    // the TV's internet address (data/Locator.kt). A city chosen by hand in the city picker wins over both.
+    // detectedAt = when it was last found (0 = not found yet).
+    private var detectedAt = 0L
+    private var manualLocation = false
+    // Name and time zone of the detected place.
+    private var city = ""
+    private var zoneId = "Asia/Manila"
     private var skyKey = ""
     // When Home was last pressed: two presses close together open the recent apps.
     private var lastHomeAt = 0L
@@ -88,7 +99,6 @@ class MainActivity : ComponentActivity() {
         Recents.load(this)
         intent.getStringExtra("name")?.let(repo::setName)
         loadLocation()
-        readLocation(intent)
         cc = ControlCenter(
             this, repo, WifiController(this), BluetoothController(this), SystemInfo(this), SettingsShortcuts(this),
             onOpen = ::startSafely,
@@ -118,6 +128,7 @@ class MainActivity : ComponentActivity() {
                         raining = raining.value,
                         weather = weatherState.value,
                         tvWallpaper = skyWallpaper.value,
+                        onSetLocation = ::setManualLocation,
                     )
                 }
             }
@@ -128,8 +139,10 @@ class MainActivity : ComponentActivity() {
         // after boot), try again after 30 seconds instead of waiting the full 10 minutes.
         lifecycleScope.launch {
             while (true) {
+                detectLocation()
                 val ok = refreshWeather()
-                delay(if (ok) 10 * 60_000L else 30_000L)
+                // Without internet try again soon; if only the location is missing, wait a little longer.
+                delay(if (!ok) 30_000L else if (detectedAt == 0L) 5 * 60_000L else 10 * 60_000L)
             }
         }
 
@@ -156,7 +169,6 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         intent.getStringExtra("name")?.let(repo::setName)
-        if (readLocation(intent)) lifecycleScope.launch { refreshWeather() }
         if (intent.hasCategory(Intent.CATEGORY_HOME)) {
             // A second press of Home shortly after the first opens the recent apps. Presses closer than
             // 150 ms are ignored, in case the TV delivers one press twice.
@@ -208,9 +220,14 @@ class MainActivity : ComponentActivity() {
 
     private fun applySky(force: Boolean) {
         val w = weather
-        val (fallbackRise, fallbackSet) = WeatherRepository.fallbackTimes()
+        val now = System.currentTimeMillis()
+        // SkyWallpaper counts the day in Manila time. Moving every time by the difference between Manila
+        // and the TV's location makes it see the local day, wherever the TV is (0 in the Philippines).
+        val skew = WeatherRepository.skewMs(w?.zone ?: zoneId, now)
+        val shiftedNow = now + skew
+        val (fallbackRise, fallbackSet) = WeatherRepository.fallbackTimes(shiftedNow)
         val phase = SkyWallpaper.phase(
-            System.currentTimeMillis(), w?.sunrise ?: fallbackRise, w?.sunset ?: fallbackSet,
+            shiftedNow, w?.sunrise?.plus(skew) ?: fallbackRise, w?.sunset?.plus(skew) ?: fallbackSet,
         )
         val rain = w?.isRaining == true
         wallpaperName.value = "Auto (sky & weather)"
@@ -235,32 +252,100 @@ class MainActivity : ComponentActivity() {
 
     /** Returns true if the weather was fetched successfully. */
     private suspend fun refreshWeather(): Boolean {
-        val result = WeatherRepository.fetch(lat, lon)
+        val result = WeatherRepository.fetch(lat, lon)?.copy(place = placeName())
         if (result != null) {
             weather = result
             weatherState.value = result
+            zoneId = result.zone
         }
         if (isAutoSelected()) applySky(force = false)
         return result != null
     }
 
-    private fun loadLocation() {
-        val prefs = getSharedPreferences("glass_location", Context.MODE_PRIVATE)
-        prefs.getString("lat", null)?.toDoubleOrNull()?.let { lat = it }
-        prefs.getString("lon", null)?.toDoubleOrNull()?.let { lon = it }
+    /**
+     * The name shown above the weather: the detected city. Empty = unknown, and the widget then says
+     * "Location unavailable".
+     */
+    private suspend fun placeName(): String {
+        // Not found yet: the weather is for the default place, so no name is shown.
+        if (detectedAt == 0L) return ""
+        if (city.isNotBlank()) return city
+        // The internet address gave coordinates but no city name: look the name up from the coordinates.
+        val name = Locator.cityFor(lat, lon).orEmpty()
+        if (name.isNotBlank()) {
+            city = name
+            getSharedPreferences("glass_location", Context.MODE_PRIVATE).edit().putString("auto_city", name).apply()
+        }
+        return name
     }
 
-    /** Reads --es lat / --es lon from an intent. Returns true if the location changed. */
-    private fun readLocation(i: Intent): Boolean {
-        val newLat = i.getStringExtra("lat")?.toDoubleOrNull() ?: return false
-        val newLon = i.getStringExtra("lon")?.toDoubleOrNull() ?: return false
-        lat = newLat
-        lon = newLon
+    /** Takes the last place that was found or chosen (saved on the TV), so the weather is right straight after start-up. */
+    private fun loadLocation() {
+        val prefs = getSharedPreferences("glass_location", Context.MODE_PRIVATE)
+        manualLocation = prefs.getBoolean("manual", false)
+        val k = if (manualLocation) "manual" else "auto"
+        prefs.getString("${k}_lat", null)?.toDoubleOrNull()?.let { lat = it }
+        prefs.getString("${k}_lon", null)?.toDoubleOrNull()?.let { lon = it }
+        detectedAt = if (manualLocation) 1L else prefs.getLong("auto_at", 0L)
+        city = prefs.getString("${k}_city", "").orEmpty()
+        zoneId = prefs.getString("${k}_zone", "Asia/Manila") ?: "Asia/Manila"
+    }
+
+    /**
+     * Finds the TV's location (at most every 6 hours unless forced): first Android's Wi-Fi location,
+     * which is the most exact, then the TV's internet address. Does nothing when a city was chosen by hand.
+     */
+    private suspend fun detectLocation(force: Boolean = false) {
+        if (manualLocation) return
+        val now = System.currentTimeMillis()
+        if (!force && detectedAt != 0L && now - detectedAt < 6 * 60 * 60_000L) return
+        val fix = WifiLocator.find(this)
+        val place = if (fix != null) {
+            Locator.Place(fix.lat, fix.lon, Locator.cityFor(fix.lat, fix.lon).orEmpty(), TimeZone.getDefault().id)
+        } else {
+            Locator.detect()
+        } ?: return
+        lat = place.lat
+        lon = place.lon
+        detectedAt = now
+        city = place.city
+        zoneId = place.zone
         getSharedPreferences("glass_location", Context.MODE_PRIVATE).edit()
-            .putString("lat", newLat.toString())
-            .putString("lon", newLon.toString())
+            .putString("auto_lat", place.lat.toString())
+            .putString("auto_lon", place.lon.toString())
+            .putString("auto_city", place.city)
+            .putString("auto_zone", place.zone)
+            .putLong("auto_at", now)
             .apply()
-        return true
+    }
+
+    /** A city was chosen in the city picker (null = go back to the automatic location). */
+    private fun setManualLocation(place: Locator.Place?) {
+        val prefs = getSharedPreferences("glass_location", Context.MODE_PRIVATE)
+        if (place == null) {
+            manualLocation = false
+            detectedAt = 0L
+            city = ""
+            prefs.edit().putBoolean("manual", false).apply()
+        } else {
+            manualLocation = true
+            lat = place.lat
+            lon = place.lon
+            city = place.city
+            zoneId = place.zone
+            detectedAt = 1L
+            prefs.edit()
+                .putBoolean("manual", true)
+                .putString("manual_lat", place.lat.toString())
+                .putString("manual_lon", place.lon.toString())
+                .putString("manual_city", place.city)
+                .putString("manual_zone", place.zone)
+                .apply()
+        }
+        lifecycleScope.launch {
+            detectLocation(force = true)
+            refreshWeather()
+        }
     }
 
     // ---- Launching ----
