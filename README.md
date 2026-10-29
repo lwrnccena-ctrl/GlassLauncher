@@ -10,6 +10,8 @@ This is a fork of [tlfares/GlassLauncher](https://github.com/tlfares/GlassLaunch
 
 ![Home screen with weather and app dock](docs/screenshots/home-screen.png)
 
+![Media playback controls and lyrics on the home screen](docs/screenshots/media-lyrics.png)
+
 | Control Center | Widgets |
 | --- | --- |
 | ![Control Center](docs/screenshots/control-center.png) | ![Widgets panel](docs/screenshots/widgets.png) |
