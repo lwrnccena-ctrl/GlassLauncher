@@ -99,6 +99,7 @@
     <string name="size_mb">%d MB</string>
     <string name="size_gb">%.1f GB</string>
     <string name="home_accessibility_description">Makes the Home button open Glass instead of stock launcher.</string>
+    <string name="overlay_service_description" translatable="false">Lets Glass open its Control Center over other apps when you press the menu button.</string>
 
     <!-- Wallpapers -->
     <string name="wallpaper_liquid">Liquid</string>
