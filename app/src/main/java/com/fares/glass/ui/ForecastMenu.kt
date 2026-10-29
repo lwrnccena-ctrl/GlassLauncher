@@ -1,96 +1,86 @@
-package com.fares.glass.ui
+package com.fares.glass.data
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicText
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.fares.glass.data.DayForecast
-
-private val MenuInk = Color(0xFF111114)
-
-private fun hourLabel(h: Int): String {
-    val h12 = if (h % 12 == 0) 12 else h % 12
-    return "$h12 ${if (h < 12) "AM" else "PM"}"
-}
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import android.os.Build
+import android.os.CancellationSignal
+import android.os.Looper
+import android.util.Log
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 
 /**
- * The forecast list that opens from the weather text. First the next days (high / low and the weather in
- * words); OK on a day shows its hours (every 3 hours); OK or Back goes back to the days.
+ * Asks Android for a location based on the Wi-Fi networks around (the "network" location provider).
+ * It can be accurate to a few hundred metres, much better than the internet address. It needs the
+ * location permission (adb shell pm grant com.fares.glass android.permission.ACCESS_FINE_LOCATION),
+ * Location switched on in the TV's settings, and a TV that has a location service (Google's).
  */
-@Composable
-fun ForecastMenu(
-    backdrop: Backdrop,
-    days: List<DayForecast>,
-    selectedDay: Int,
-    hourLevel: Boolean,
-    hourIndex: Int,
-    modifier: Modifier = Modifier,
-) {
-    val day = days.getOrNull(selectedDay)
-    Box(modifier.width(300.dp)) {
-        Glass(backdrop, Modifier.matchParentSize(), shape = RoundedCornerShape(22.dp), tint = Color.White.copy(alpha = 0.10f))
-        Column(Modifier.padding(horizontal = 10.dp, vertical = 10.dp)) {
-            BasicText(
-                if (hourLevel && day != null) "${day.label} \u00B7 OK or Back for the days" else "Next days \u00B7 OK shows the hours",
-                Modifier.padding(start = 8.dp, bottom = 6.dp),
-                style = txt(Color.White.copy(alpha = 0.55f), 11.sp, FontWeight.Medium),
-            )
-            if (!hourLevel) {
-                days.forEachIndexed { i, d ->
-                    ForecastRow(
-                        d.label,
-                        "${d.maxC}\u00B0 / ${d.minC}\u00B0 ${weatherDescribe(d.code, true).second}",
-                        i == selectedDay,
-                    )
+object WifiLocator {
+
+    class Fix(val lat: Double, val lon: Double)
+
+    @SuppressLint("MissingPermission")
+    suspend fun find(context: Context): Fix? {
+        val app = context.applicationContext
+        val granted =
+            app.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                app.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            Log.i("Glass", "Wi-Fi location: no location permission")
+            return null
+        }
+        val lm = app.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return null
+        val provider = LocationManager.NETWORK_PROVIDER
+        try {
+            if (provider !in lm.allProviders) {
+                Log.i("Glass", "Wi-Fi location: this TV has no network location provider")
+                return null
+            }
+            if (!lm.isProviderEnabled(provider)) {
+                Log.i("Glass", "Wi-Fi location: Location is switched off in the TV's settings")
+                return null
+            }
+            // A recent answer is fine.
+            lm.getLastKnownLocation(provider)?.let {
+                if (System.currentTimeMillis() - it.time < 24 * 60 * 60_000L) return Fix(it.latitude, it.longitude)
+            }
+        } catch (e: Exception) {
+            Log.w("Glass", "Wi-Fi location failed", e)
+            return null
+        }
+        return withTimeoutOrNull(15_000L) { newFix(lm, provider, app) }
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun newFix(lm: LocationManager, provider: String, app: Context): Fix? =
+        suspendCancellableCoroutine { cont ->
+            try {
+                if (Build.VERSION.SDK_INT >= 30) {
+                    val signal = CancellationSignal()
+                    cont.invokeOnCancellation { signal.cancel() }
+                    lm.getCurrentLocation(provider, signal, app.mainExecutor) { loc ->
+                        if (cont.isActive) cont.resume(loc?.let { Fix(it.latitude, it.longitude) })
+                    }
+                } else {
+                    val listener = object : LocationListener {
+                        override fun onLocationChanged(location: Location) {
+                            lm.removeUpdates(this)
+                            if (cont.isActive) cont.resume(Fix(location.latitude, location.longitude))
+                        }
+                    }
+                    cont.invokeOnCancellation { lm.removeUpdates(listener) }
+                    @Suppress("DEPRECATION")
+                    lm.requestSingleUpdate(provider, listener, Looper.getMainLooper())
                 }
-                // After the last day: pick another city.
-                ForecastRow("Change location\u2026", "", selectedDay == days.size)
-            } else {
-                day?.hours?.filter { it.hour % 3 == 0 }?.forEachIndexed { i, h ->
-                    ForecastRow(
-                        hourLabel(h.hour),
-                        "${h.tempC}\u00B0 ${weatherDescribe(h.code, h.hour in 6..17).second}",
-                        i == hourIndex,
-                    )
-                }
+            } catch (e: Exception) {
+                Log.w("Glass", "Wi-Fi location failed", e)
+                if (cont.isActive) cont.resume(null)
             }
         }
-    }
-}
-
-@Composable
-private fun ForecastRow(left: String, right: String, selected: Boolean) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp)
-            .background(if (selected) Color.White.copy(alpha = 0.95f) else Color.Transparent, RoundedCornerShape(14.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        BasicText(
-            left, Modifier.weight(1f),
-            style = txt(if (selected) MenuInk else Color.White, 14.sp, FontWeight.SemiBold),
-            maxLines = 1,
-        )
-        BasicText(
-            right,
-            style = txt(if (selected) MenuInk.copy(alpha = 0.7f) else Color.White.copy(alpha = 0.6f), 12.sp, FontWeight.Medium),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
 }
