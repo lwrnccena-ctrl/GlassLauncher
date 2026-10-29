@@ -148,6 +148,20 @@
                 android:resource="@xml/glass_accessibility" />
         </service>
 
+        <!-- Control Center over other apps: opens when you press the menu button -->
+        <service
+            android:name=".GlassOverlayService"
+            android:exported="false"
+            android:label="Glass overlay"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/glass_overlay_service" />
+        </service>
+
         <!-- Now playing card: lets Glass see which media is playing -->
         <service
             android:name=".sys.MediaListener"
