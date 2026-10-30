@@ -1,0 +1,25 @@
+name: Make key
+on: workflow_dispatch
+env:
+  PASS: 160504
+jobs:
+  key:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Make keystore
+        run: |
+          keytool -genkeypair \
+            -keystore glass.jks \
+            -alias glass \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass "$PASS" \
+            -keypass "$PASS" \
+            -dname "CN=Glass"
+      - name: Convert to text
+        run: base64 -w0 glass.jks > key.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: key
+          path: key.txt
