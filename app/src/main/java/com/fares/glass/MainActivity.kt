@@ -336,4 +336,70 @@ class MainActivity : ComponentActivity() {
         val prefs = getSharedPreferences("glass_location", Context.MODE_PRIVATE)
         if (place == null) {
             manualLocation = false
-            detectedAt =
+            detectedAt = 0L
+            city = ""
+            prefs.edit().putBoolean("manual", false).apply()
+        } else {
+            manualLocation = true
+            lat = place.lat
+            lon = place.lon
+            city = place.city
+            zoneId = place.zone
+            detectedAt = 1L
+            prefs.edit()
+                .putBoolean("manual", true)
+                .putString("manual_lat", place.lat.toString())
+                .putString("manual_lon", place.lon.toString())
+                .putString("manual_city", place.city)
+                .putString("manual_zone", place.zone)
+                .apply()
+        }
+        lifecycleScope.launch {
+            detectLocation(force = true)
+            refreshWeather()
+        }
+    }
+
+    // ---- Launching ----
+
+    /** from = where the system animation starts; null = no system animation (the launcher drew its own). */
+    private fun launch(entry: AppEntry, from: Rect?) {
+        if (entry.pkg != packageName) Recents.push(entry.pkg)
+        val options = if (from != null) {
+            ActivityOptions.makeScaleUpAnimation(window.decorView, from.left, from.top, from.width(), from.height())
+        } else {
+            ActivityOptions.makeCustomAnimation(this, 0, 0)
+        }
+        try {
+            startActivity(entry.launchIntent(), options.toBundle())
+        } catch (e: Exception) {
+            Log.w("Glass", "Can't launch ${entry.pkg}", e)
+            packageManager.getLaunchIntentForPackage(entry.pkg)?.let { startSafely(it) }
+        }
+    }
+
+    private fun run(command: Command) {
+        when (command) {
+            Command.Settings -> startSafely(Intent(Settings.ACTION_SETTINGS))
+            Command.Network -> startSafely(Intent(Settings.ACTION_WIFI_SETTINGS))
+            Command.Bluetooth -> startSafely(Intent("android.settings.CONTROLLERS_SETTINGS"))
+            Command.Apps -> startSafely(Intent(Settings.ACTION_APPLICATION_SETTINGS))
+            is Command.AppInfo -> startSafely(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", command.pkg, null)),
+            )
+            Command.NextWallpaper -> {
+                repo.setWallpaper((repo.wallpaperIndex + 1) % (Wallpapers.count(this) + 1))
+                loadWallpaper()
+            }
+        }
+    }
+
+    private fun startSafely(intent: Intent) {
+        try {
+            startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Exception) {
+            Log.w("Glass", "No activity for $intent", e)
+            if (intent.action != Settings.ACTION_SETTINGS) startSafely(Intent(Settings.ACTION_SETTINGS))
+        }
+    }
+}
