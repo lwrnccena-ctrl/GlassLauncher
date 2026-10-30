@@ -464,6 +464,23 @@ fun HomeScreen(
         }
     }
 
+    /** Yellow button: opens the Control Center, and closes it again when it is already open. */
+    fun yellowKey() {
+        when (state.mode) {
+            Mode.Control -> {
+                // Close it (also while a Control Center sub-page is showing).
+                state.mode = Mode.Browse
+            }
+            Mode.Browse, Mode.Top -> {
+                mediaFocus = -1
+                cc.open(CcPage.Main)
+                state.mode = Mode.Control
+            }
+            Mode.Jiggle -> { repo.saveOrder(); state.mode = Mode.Browse }
+            Mode.Menu -> state.mode = Mode.Browse
+        }
+    }
+
     /** Keys while the stack of recent apps is showing. */
     fun recentsKey(e: AndroidKey): Boolean {
         val down = e.action == AndroidKey.ACTION_DOWN
@@ -584,6 +601,16 @@ fun HomeScreen(
         if (locOpen) return locationKey(e)
         if (inputOpen) return inputKey(e)
         if (forecastOpen && forecastDays.isNotEmpty()) return forecastKey(e)
+
+        // Yellow button: toggles the Control Center. This sits before the Control Center's own key
+        // handler, otherwise that handler would swallow the key while the panel is open.
+        if (e.keyCode == AndroidKey.KEYCODE_PROG_YELLOW) {
+            // Not while the Wi-Fi password is being typed.
+            if (cc.typing) return false
+            if (e.action == AndroidKey.ACTION_DOWN && e.repeatCount == 0) yellowKey()
+            return true
+        }
+
         if (state.mode == Mode.Control) return cc.onKey(e)
         val down = e.action == AndroidKey.ACTION_DOWN
 
