@@ -779,8 +779,9 @@ fun HomeScreen(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         // The greeting is outlined while it is selected (Up from the top buttons).
+                        // The clock under it follows the style chosen in Control Center > Clock.
                         Box(Modifier.focusOutline(nameFocus)) {
-                            HomeHeader(repo.userName, Modifier)
+                            HomeHeader(repo.userName, Modifier, repo.clockStyle)
                         }
                         if (weather != null && Features.weather) {
                             Spacer(Modifier.width(28.dp))
