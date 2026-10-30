@@ -8,6 +8,7 @@ import android.os.Build
 import android.view.KeyEvent as AndroidKey
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -15,8 +16,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
@@ -33,6 +32,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -298,10 +298,28 @@ fun HomeScreen(
     val scrollTarget = if (row == 0) 0f else (topRowY + Metrics.Pitch * row - Metrics.GridRowY).value
     val scroll = animateFloatAsState(scrollTarget, spring(dampingRatio = 1f, stiffness = 210f), label = "scroll")
     val inGrid = row > 0 || state.mode == Mode.Control
-    val blur by animateFloatAsState(if (inGrid) 1f else 0f, tween(450), label = "blur")
+    // The background blurs quickly while the Control Center opens, so the panel grows over an already soft wallpaper.
+    val blurMs = when {
+        state.mode == Mode.Control -> 320
+        row == 0 -> 260
+        else -> 450
+    }
+    val blur by animateFloatAsState(if (inGrid) 1f else 0f, tween(blurMs), label = "blur")
     val dim by animateFloatAsState(
         if (state.mode == Mode.Control || state.mode == Mode.Menu) 0.3f else 0f, tween(250), label = "dim",
     )
+
+    // Control Center open / close progress (0 = closed, 1 = open). It is only read while drawing
+    // (inside graphicsLayer blocks), so animating it never recomposes this big screen.
+    val ccOpen = state.mode == Mode.Control
+    val ccAnim = animateFloatAsState(
+        if (ccOpen) 1f else 0f,
+        if (ccOpen) tween(CcOpenMs, easing = LinearEasing) else tween(CcCloseMs, easing = LinearEasing),
+        label = "ccReveal",
+    )
+    val ccShown by remember { derivedStateOf { ccAnim.value > 0.001f } }
+    val ccReveal = remember { CcReveal({ ccAnim.value }, { state.mode == Mode.Control }) }
+
     val focused = apps.getOrNull(state.focus)
     val ambience = if (repo.topShelf && row == 0 && state.mode == Mode.Browse) {
         focused?.let { repo.visuals[it.pkg]?.ambience }
@@ -807,12 +825,12 @@ fun HomeScreen(
                 HintPill(backdrop, stringResource(R.string.hint_move, focused?.label.orEmpty()), Modifier)
             }
 
-            AnimatedVisibility(
-                state.mode == Mode.Control, Modifier.align(Alignment.TopEnd).padding(top = 12.dp, end = 24.dp),
-                enter = fadeIn(tween(220)) + slideInHorizontally(spring(dampingRatio = 0.85f, stiffness = 420f)) { it / 2 },
-                exit = fadeOut(tween(180)) + slideOutHorizontally(tween(220)) { it / 2 },
-            ) {
-                cc.Panel(backdrop, wallpaperName, Modifier)
+            // Control Center: the panel grows out of the top-right corner, then its tiles spread out
+            // one after another. It stays composed until the (faster) closing animation has finished.
+            if (ccShown) {
+                Box(Modifier.align(Alignment.TopEnd).padding(top = PanelTop, end = PanelEnd)) {
+                    cc.Panel(backdrop, wallpaperName, ccReveal, Modifier)
+                }
             }
 
             if (focused != null) {
