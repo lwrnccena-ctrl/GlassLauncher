@@ -82,6 +82,9 @@ class GlassOverlayService : AccessibilityService() {
             KeyEvent.KEYCODE_PROG_YELLOW,   // yellow button, backup
         )
 
+        /** Button that also CLOSES the overlay while it is open (the yellow button toggles it). */
+        private const val CLOSE_KEY = KeyEvent.KEYCODE_PROG_YELLOW
+
         /** Logs every remote key to logcat so you can find your button's code: adb logcat -s GlassOverlay */
         private const val LOG_KEYS = true
 
@@ -159,9 +162,22 @@ class GlassOverlayService : AccessibilityService() {
             Log.d(TAG, "key ${KeyEvent.keyCodeToString(event.keyCode)} (${event.keyCode})")
         }
         if (!attached) return false
-        // The key-up of the press that opened the overlay.
+        // The key-up of the press that opened (or closed) the overlay.
         if (event.action == KeyEvent.ACTION_UP && swallowed.remove(event.keyCode)) return true
-        // Overlay open: let keys reach the overlay window. Launcher in front: it has its own Control Center.
+
+        // Overlay open: the yellow button closes it again (it toggles).
+        // The service hears the key before the overlay window does, so this works while the overlay has focus.
+        if (shown && event.keyCode == CLOSE_KEY) {
+            // Not while the Wi-Fi password is being typed.
+            if (cc.typing) return false
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                if (event.repeatCount == 0) cc.close() // runs onClose -> hide()
+                swallowed.add(event.keyCode)
+            }
+            return true
+        }
+
+        // Overlay open: let the other keys reach the overlay window. Launcher in front: it has its own Control Center.
         if (shown || MainActivity.isForeground || event.keyCode !in TRIGGER_KEYS) return false
         if (event.action == KeyEvent.ACTION_DOWN) {
             if (event.repeatCount == 0) show()
@@ -186,7 +202,7 @@ class GlassOverlayService : AccessibilityService() {
         visible = true
     }
 
-    /** Only called through cc.close() (Back, Menu, or dismissOverlay). */
+    /** Only called through cc.close() (Back, Menu, yellow, or dismissOverlay). */
     private fun hide() {
         if (!shown) return
         shown = false
