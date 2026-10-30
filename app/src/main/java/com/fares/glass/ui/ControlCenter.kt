@@ -80,7 +80,9 @@ import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -96,6 +98,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
@@ -106,6 +110,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -182,6 +187,23 @@ private class CornerHost {
 private class OwnCoords {
     var value by mutableStateOf<LayoutCoordinates?>(null)
 }
+
+/**
+ * True when there is no blurred wallpaper behind the Control Center (for example the Top Shelf
+ * video is showing). Then the big panel is not drawn and every tile gets a milky frosted fill.
+ */
+private val LocalClear = compositionLocalOf { false }
+
+/** Resting fill of a tile: the normal faint white, or a milky white when there is no panel behind it. */
+private fun restFill(clear: Boolean, normal: Float): Color = White.copy(alpha = if (clear) 0.28f else normal)
+
+/** Thin light rim around a tile so it stands out over a video. Fades out when the tile is focused. */
+private fun Modifier.glassEdge(clear: Boolean, focus: Float, shape: Shape): Modifier =
+    if (clear) border(1.dp, White.copy(alpha = 0.45f * (1f - focus)), shape) else this
+
+/** Soft dark shadow behind text so it stays readable over a bright video. */
+private fun TextStyle.shade(on: Boolean): TextStyle =
+    if (on) copy(shadow = Shadow(Color.Black.copy(alpha = 0.55f), Offset(0f, 1f), 4f)) else this
 
 /**
  * Makes this element grow out of the panel's top-right corner (scale + fade), later for elements
@@ -795,59 +817,66 @@ class ControlCenter(
      * The panel. [reveal] drives the open / close animation: the whole panel grows out of its
      * top-right corner (with the background already blurring behind it), then the tiles spread
      * out one after another. Closing is the same in reverse, but faster.
+     *
+     * When there is no blurred wallpaper behind it (the Top Shelf video is showing), the big
+     * panel is not drawn at all and the tiles get a milky frosted fill instead.
      */
     @Composable
     fun Panel(backdrop: Backdrop, wallpaperName: String, reveal: CcReveal, modifier: Modifier) {
         val density = LocalDensity.current
         val host = remember { CornerHost() }
+        val clear = backdrop.frosted == null
         // Final top-left corner of the panel on the screen, so the frosted glass stays lined up while it scales.
         val finalOrigin = with(density) {
             Offset(backdrop.screen.width - (PanelWidth + PanelEnd).toPx(), PanelTop.toPx())
         }
-        Glass(
-            backdrop,
-            modifier
-                .size(PanelWidth, PanelHeight)
-                .graphicsLayer {
-                    val t = reveal.progress()
-                    val grow: Float
-                    val fade: Float
-                    if (reveal.opening()) {
-                        grow = stage(t, PanelDelayMs, PanelGrowMs, PanelEase)
-                        fade = stage(t, PanelFadeDelayMs, PanelFadeMs, FadeEase)
-                    } else {
-                        grow = FastOutSlowInEasing.transform(t.coerceIn(0f, 1f))
-                        fade = t
-                    }
-                    val s = PanelStartScale + (1f - PanelStartScale) * grow
-                    scaleX = s
-                    scaleY = s
-                    alpha = fade.coerceIn(0f, 1f)
-                    transformOrigin = TransformOrigin(1f, 0f)
-                },
-            RoundedCornerShape(36.dp),
-            tint = White.copy(alpha = 0.08f),
-            fixedOrigin = finalOrigin,
-        ) {
-            AnimatedContent(
-                page,
-                transitionSpec = {
-                    val forward = targetState != CcPage.Main
-                    (slideInHorizontally(tween(260)) { if (forward) it / 3 else -it / 3 } + fadeIn(tween(200))) togetherWith
-                        (slideOutHorizontally(tween(220)) { if (forward) -it / 3 else it / 3 } + fadeOut(tween(160)))
-                },
-                label = "ccPage",
-            ) { p ->
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .padding(16.dp)
-                        .onGloballyPositioned { host.coords = it },
-                ) {
-                    when (p) {
-                        CcPage.Main -> MainPage(wallpaperName, host, reveal)
-                        CcPage.Widgets -> WidgetsPage()
-                        else -> DetailPage(p)
+        CompositionLocalProvider(LocalClear provides clear) {
+            Glass(
+                backdrop,
+                modifier
+                    .size(PanelWidth, PanelHeight)
+                    .graphicsLayer {
+                        val t = reveal.progress()
+                        val grow: Float
+                        val fade: Float
+                        if (reveal.opening()) {
+                            grow = stage(t, PanelDelayMs, PanelGrowMs, PanelEase)
+                            fade = stage(t, PanelFadeDelayMs, PanelFadeMs, FadeEase)
+                        } else {
+                            grow = FastOutSlowInEasing.transform(t.coerceIn(0f, 1f))
+                            fade = t
+                        }
+                        val s = PanelStartScale + (1f - PanelStartScale) * grow
+                        scaleX = s
+                        scaleY = s
+                        alpha = fade.coerceIn(0f, 1f)
+                        transformOrigin = TransformOrigin(1f, 0f)
+                    },
+                RoundedCornerShape(36.dp),
+                tint = White.copy(alpha = 0.08f),
+                fixedOrigin = finalOrigin,
+                showPanel = !clear,
+            ) {
+                AnimatedContent(
+                    page,
+                    transitionSpec = {
+                        val forward = targetState != CcPage.Main
+                        (slideInHorizontally(tween(260)) { if (forward) it / 3 else -it / 3 } + fadeIn(tween(200))) togetherWith
+                            (slideOutHorizontally(tween(220)) { if (forward) -it / 3 else it / 3 } + fadeOut(tween(160)))
+                    },
+                    label = "ccPage",
+                ) { p ->
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .padding(16.dp)
+                            .onGloballyPositioned { host.coords = it },
+                    ) {
+                        when (p) {
+                            CcPage.Main -> MainPage(wallpaperName, host, reveal)
+                            CcPage.Widgets -> WidgetsPage()
+                            else -> DetailPage(p)
+                        }
                     }
                 }
             }
@@ -856,6 +885,7 @@ class ControlCenter(
 
     @Composable
     private fun MainPage(wallpaperName: String, host: CornerHost, reveal: CcReveal) {
+        val clear = LocalClear.current
         val (time, date) = rememberClock(rememberNow())
         val tiles = tiles(wallpaperName)
         Column(Modifier.fillMaxSize()) {
@@ -865,8 +895,8 @@ class ControlCenter(
                 verticalAlignment = Alignment.Top,
             ) {
                 Column(Modifier.weight(1f)) {
-                    BasicText(time, style = txt(White, 28.sp, FontWeight.Bold))
-                    BasicText(date, style = txt(White.copy(alpha = 0.7f), 13.sp, FontWeight.Medium))
+                    BasicText(time, style = txt(White, 28.sp, FontWeight.Bold).shade(clear))
+                    BasicText(date, style = txt(White.copy(alpha = 0.7f), 13.sp, FontWeight.Medium).shade(clear))
                 }
                 RoundButton(Icons.Rounded.Terminal, index == ADB_BTN)
             }
@@ -930,7 +960,9 @@ class ControlCenter(
                     else -> " "
                 },
                 Modifier.fillMaxWidth(),
-                style = txt(White.copy(alpha = 0.85f), 13.sp, FontWeight.SemiBold).copy(textAlign = androidx.compose.ui.text.style.TextAlign.Center),
+                style = txt(White.copy(alpha = 0.85f), 13.sp, FontWeight.SemiBold)
+                    .copy(textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    .shade(clear),
             )
         }
     }
@@ -941,13 +973,16 @@ class ControlCenter(
 
     @Composable
     private fun ModuleTile(t: Tile, focused: Boolean, modifier: Modifier) {
+        val clear = LocalClear.current
         val f = focusAmount(focused)
         val fg = lerp(White, Ink, f)
+        val shape = RoundedCornerShape(24.dp)
         Column(
             modifier
                 .height(TileHeight)
                 .graphicsLayer { scaleX = 1f + 0.06f * f; scaleY = 1f + 0.06f * f }
-                .background(lerp(White.copy(alpha = 0.10f), White.copy(alpha = 0.95f), f), RoundedCornerShape(24.dp))
+                .background(lerp(restFill(clear, 0.10f), White.copy(alpha = 0.95f), f), shape)
+                .glassEdge(clear, f, shape)
                 .padding(horizontal = 11.dp, vertical = 5.dp),
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
@@ -970,13 +1005,16 @@ class ControlCenter(
     /** Wide tile with only an icon and no text. */
     @Composable
     private fun WideIconTile(icon: ImageVector, focused: Boolean, modifier: Modifier = Modifier) {
+        val clear = LocalClear.current
         val f = focusAmount(focused)
+        val shape = RoundedCornerShape(24.dp)
         Box(
             modifier
                 .fillMaxWidth()
                 .height(48.dp)
                 .graphicsLayer { scaleX = 1f + 0.04f * f; scaleY = 1f + 0.04f * f }
-                .background(lerp(White.copy(alpha = 0.10f), White.copy(alpha = 0.95f), f), RoundedCornerShape(24.dp)),
+                .background(lerp(restFill(clear, 0.10f), White.copy(alpha = 0.95f), f), shape)
+                .glassEdge(clear, f, shape),
             contentAlignment = Alignment.Center,
         ) {
             Image(rememberVectorPainter(icon), null, Modifier.size(24.dp), colorFilter = ColorFilter.tint(lerp(White, Ink, f)))
@@ -991,16 +1029,18 @@ class ControlCenter(
     private fun VerticalLevelSlider(
         icon: ImageVector, tint: Color, percent: Int, note: String?, focused: Boolean, modifier: Modifier,
     ) {
+        val clear = LocalClear.current
         val f = focusAmount(focused)
         val fill by animateFloatAsState(percent / 100f, tween(120), label = "levelFill")
         val shape = RoundedCornerShape(24.dp)
+        val edge = maxOf(0.9f * f, if (clear) 0.45f else 0f)
         Box(
             modifier
                 .fillMaxHeight()
                 .graphicsLayer { scaleX = 1f + 0.04f * f; scaleY = 1f + 0.03f * f }
                 .clip(shape)
-                .background(lerp(White.copy(alpha = 0.12f), White.copy(alpha = 0.22f), f))
-                .border(2.dp, White.copy(alpha = 0.9f * f), shape),
+                .background(lerp(restFill(clear, 0.12f), White.copy(alpha = 0.34f), f))
+                .border(if (f > 0.5f) 2.dp else 1.dp, White.copy(alpha = edge), shape),
         ) {
             Box(
                 Modifier
@@ -1012,7 +1052,9 @@ class ControlCenter(
             BasicText(
                 note ?: "$percent%",
                 Modifier.align(Alignment.TopCenter).padding(top = 10.dp),
-                style = txt(White, 11.sp, FontWeight.SemiBold).copy(textAlign = androidx.compose.ui.text.style.TextAlign.Center),
+                style = txt(White, 11.sp, FontWeight.SemiBold)
+                    .copy(textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    .shade(clear),
                 maxLines = 1,
             )
             Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp)) { Icon(icon, tint, 18) }
@@ -1021,13 +1063,15 @@ class ControlCenter(
 
     @Composable
     private fun RoundButton(icon: ImageVector, focused: Boolean) {
+        val clear = LocalClear.current
         val f = focusAmount(focused)
         Box(
             Modifier
                 .size(44.dp)
                 .graphicsLayer { scaleX = 1f + 0.1f * f; scaleY = 1f + 0.1f * f }
                 .clip(CircleShape)
-                .background(lerp(White.copy(alpha = 0.12f), White.copy(alpha = 0.95f), f)),
+                .background(lerp(restFill(clear, 0.12f), White.copy(alpha = 0.95f), f))
+                .glassEdge(clear, f, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
             Image(rememberVectorPainter(icon), null, Modifier.size(20.dp), colorFilter = ColorFilter.tint(lerp(White, Ink, f)))
@@ -1038,11 +1082,12 @@ class ControlCenter(
 
     @Composable
     private fun WidgetsPage() {
+        val clear = LocalClear.current
         val items = widgetItems()
         Column(Modifier.fillMaxSize()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Image(rememberVectorPainter(Icons.Rounded.ChevronLeft), null, Modifier.size(26.dp), colorFilter = ColorFilter.tint(White.copy(alpha = 0.7f)))
-                BasicText("Widgets", style = txt(White, 24.sp, FontWeight.Bold))
+                BasicText("Widgets", style = txt(White, 24.sp, FontWeight.Bold).shade(clear))
             }
             Spacer(Modifier.height(12.dp))
             for (r in 0 until 2) {
@@ -1060,13 +1105,16 @@ class ControlCenter(
     /** Big on/off tile: the icon circle turns green when the widget is on, grey when it is off. */
     @Composable
     private fun WidgetTile(w: WidgetItem, focused: Boolean, modifier: Modifier) {
+        val clear = LocalClear.current
         val f = focusAmount(focused)
         val fg = lerp(White, Ink, f)
+        val shape = RoundedCornerShape(26.dp)
         Column(
             modifier
                 .height(112.dp)
                 .graphicsLayer { scaleX = 1f + 0.05f * f; scaleY = 1f + 0.05f * f }
-                .background(lerp(White.copy(alpha = 0.10f), White.copy(alpha = 0.95f), f), RoundedCornerShape(26.dp))
+                .background(lerp(restFill(clear, 0.10f), White.copy(alpha = 0.95f), f), shape)
+                .glassEdge(clear, f, shape)
                 .padding(12.dp),
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
@@ -1088,13 +1136,14 @@ class ControlCenter(
 
     @Composable
     private fun DetailPage(p: CcPage) {
+        val clear = LocalClear.current
         val list = rows()
         Column {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Image(rememberVectorPainter(Icons.Rounded.ChevronLeft), null, Modifier.size(26.dp), colorFilter = ColorFilter.tint(White.copy(alpha = 0.7f)))
                 BasicText(
                     when (p) { CcPage.Wifi -> "Wi-Fi"; CcPage.Adb -> "ADB"; else -> "Bluetooth" },
-                    style = txt(White, 24.sp, FontWeight.Bold),
+                    style = txt(White, 24.sp, FontWeight.Bold).shade(clear),
                 )
             }
             Spacer(Modifier.height(12.dp))
@@ -1108,20 +1157,23 @@ class ControlCenter(
 
     @Composable
     private fun DetailRow(r: Line, focused: Boolean) {
+        val clear = LocalClear.current
         when (r) {
             is Line.Header -> BasicText(r.title.uppercase(Locale.getDefault()), Modifier.padding(start = 12.dp, top = 8.dp, bottom = 4.dp),
-                style = txt(White.copy(alpha = 0.55f), 11.sp, FontWeight.SemiBold))
+                style = txt(White.copy(alpha = 0.55f), 11.sp, FontWeight.SemiBold).shade(clear))
             is Line.Note -> BasicText(r.text, Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                style = txt(White.copy(alpha = 0.6f), 12.sp, FontWeight.Medium), maxLines = 3)
+                style = txt(White.copy(alpha = 0.6f), 12.sp, FontWeight.Medium).shade(clear), maxLines = 3)
             else -> {
                 val f = focusAmount(focused)
                 val fg = lerp(White, Ink, f)
+                val shape = RoundedCornerShape(16.dp)
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .padding(vertical = 2.dp)
                         .graphicsLayer { scaleX = 1f + 0.025f * f; scaleY = 1f + 0.025f * f }
-                        .background(lerp(White.copy(alpha = 0.08f), White.copy(alpha = 0.95f), f), RoundedCornerShape(16.dp))
+                        .background(lerp(restFill(clear, 0.08f), White.copy(alpha = 0.95f), f), shape)
+                        .glassEdge(clear, f, shape)
                         .padding(horizontal = 12.dp, vertical = 9.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
