@@ -53,6 +53,8 @@ fun Glass(
      * background stays lined up. Null = measure the position from the layout, as before.
      */
     fixedOrigin: Offset? = null,
+    /** False = draw nothing behind the content (no panel, no rim). The content is still shown. */
+    showPanel: Boolean = true,
     content: @Composable BoxScope.() -> Unit = {},
 ) {
     var origin by remember { mutableStateOf(Offset.Zero) }
@@ -81,6 +83,7 @@ fun Glass(
                 )
                 val rimWidth = 1.2.dp.toPx()
                 onDrawBehind {
+                    if (!showPanel) return@onDrawBehind
                     val o = fixed.value ?: origin
                     clipPath(path) {
                         (source ?: backdrop.frosted)?.let { img ->
