@@ -132,7 +132,7 @@ class AppRepository(context: Context) {
     }
 
     /** Saves the clock style chosen in Control Center > Clock. */
-    fun setClockStyle(style: Int) {
+    fun changeClockStyle(style: Int) { 
         clockStyle = style.coerceIn(0, ClockStyle.COUNT - 1)
         prefs.edit().putInt("clockStyle", clockStyle).apply()
     }
