@@ -12,8 +12,20 @@ android {
         // Fire TV Stick 4K (1st gen): Fire OS 6 = Android 7.1 (API 25).
         minSdk = 25
         targetSdk = 36
-        versionCode = 5
-        versionName = "2.2.1"
+        versionCode = 6
+        versionName = "2.2.2"
+    }
+
+    signingConfigs {
+        create("glassRelease") {
+            val path = System.getenv("KEYSTORE_PATH")
+            if (path != null && file(path).exists()) {
+                storeFile = file(path)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
@@ -24,7 +36,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug")
+            val glassKey = signingConfigs.getByName("glassRelease")
+            signingConfig = if (glassKey.storeFile != null) {
+                glassKey
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
     compileOptions {
