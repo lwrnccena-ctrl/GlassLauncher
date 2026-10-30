@@ -3,6 +3,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -12,7 +15,14 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+      - name: Load key
+        run: echo "${{ secrets.KEYSTORE_B64 }}" | base64 -d > $GITHUB_WORKSPACE/glass.jks
       - name: Build
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/glass.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease
@@ -20,3 +30,14 @@ jobs:
         with:
           name: Glass-apk
           path: app/build/outputs/apk/release/*.apk
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            echo "Release v$VERSION already exists, skipping"
+          else
+            gh release create "v$VERSION" app/build/outputs/apk/release/*.apk \
+              --title "Glass $VERSION" --notes "Glass $VERSION"
+          fi
