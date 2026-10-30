@@ -21,6 +21,8 @@ data class DayForecast(
     val minC: Int,
     val code: Int,
     val hours: List<HourForecast>,
+    /** Chance of rain for the day, in percent (0 if the forecast does not say). */
+    val rainPct: Int = 0,
 )
 
 data class Weather(
@@ -35,6 +37,12 @@ data class Weather(
     val zone: String = "Asia/Manila",
     /** Today and the next days (empty if the forecast could not be read). */
     val days: List<DayForecast> = emptyList(),
+    /** "Feels like" temperature. */
+    val feelsC: Int = 0,
+    /** Relative humidity, in percent. */
+    val humidity: Int = 0,
+    /** Wind speed in km/h. */
+    val windKmh: Int = 0,
 ) {
     /** Drizzle, rain, showers, thunderstorm. */
     val isRaining get() = code in 51..67 || code in 80..82 || code in 95..99
@@ -59,8 +67,8 @@ object WeatherRepository {
                 // timezone=auto: times come in the local time of the place, wherever it is.
                 val url = URL(
                     "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon" +
-                        "&current=temperature_2m,weather_code" +
-                        "&daily=sunrise,sunset,weather_code,temperature_2m_max,temperature_2m_min" +
+                        "&current=temperature_2m,weather_code,apparent_temperature,relative_humidity_2m,wind_speed_10m" +
+                        "&daily=sunrise,sunset,weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
                         "&hourly=temperature_2m,weather_code" +
                         "&timezone=auto&forecast_days=7"
                 )
@@ -75,13 +83,17 @@ object WeatherRepository {
                 val zone = json.optString("timezone", "Asia/Manila").ifBlank { "Asia/Manila" }
                 val zoneTz = TimeZone.getTimeZone(zone)
                 val fmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm", Locale.US).apply { timeZone = zoneTz }
+                val temp = cur.getDouble("temperature_2m")
                 Weather(
-                    tempC = cur.getDouble("temperature_2m").roundToInt(),
+                    tempC = temp.roundToInt(),
                     code = cur.getInt("weather_code"),
                     sunrise = fmt.parse(daily.getJSONArray("sunrise").getString(0))!!.time,
                     sunset = fmt.parse(daily.getJSONArray("sunset").getString(0))!!.time,
                     zone = zone,
                     days = readDays(json, zoneTz),
+                    feelsC = cur.optDouble("apparent_temperature", temp).roundToInt(),
+                    humidity = cur.optDouble("relative_humidity_2m", 0.0).roundToInt(),
+                    windKmh = cur.optDouble("wind_speed_10m", 0.0).roundToInt(),
                 )
             } catch (e: Exception) {
                 null
@@ -95,6 +107,7 @@ object WeatherRepository {
         val maxs = daily.getJSONArray("temperature_2m_max")
         val mins = daily.getJSONArray("temperature_2m_min")
         val codes = daily.getJSONArray("weather_code")
+        val rains = daily.optJSONArray("precipitation_probability_max")
 
         val hourly = json.getJSONObject("hourly")
         val hTimes = hourly.getJSONArray("time")
@@ -121,6 +134,7 @@ object WeatherRepository {
             DayForecast(
                 label, maxs.getDouble(i).roundToInt(), mins.getDouble(i).roundToInt(), codes.getInt(i),
                 byDate[date].orEmpty(),
+                rainPct = rains?.optInt(i, 0) ?: 0,
             )
         }
     } catch (e: Exception) {
