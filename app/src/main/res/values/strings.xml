@@ -38,6 +38,14 @@
     <string name="cc_memory">Memory</string>
     <string name="cc_storage">Storage</string>
 
+    <!-- Control Center: Clock page -->
+    <string name="cc_clock">Clock</string>
+    <string name="clock_classic">Classic</string>
+    <string name="clock_stacked">Stacked</string>
+    <string name="clock_analog">Analog</string>
+    <string name="clock_pill">Pill</string>
+    <string name="clock_flip">Flip tiles</string>
+
     <!-- Control Center: Wi-Fi -->
     <string name="wifi_networks">Networks</string>
     <string name="wifi_searching">Looking for networks…</string>
