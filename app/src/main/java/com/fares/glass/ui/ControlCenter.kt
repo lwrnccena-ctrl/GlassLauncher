@@ -656,7 +656,7 @@ class ControlCenter(
 
     // ---- Clock page (second control center: the clock styles) ----
 
-    private fun selectClock() = repo.setClockStyle(clockIndex)
+    private fun selectClock() = repo.changeClockStyle(clockIndex)
 
     /** 2-column grid (the last row has one style). Left from the left column goes back to the main page. */
     private fun moveClock(dx: Int, dy: Int) {
