@@ -152,9 +152,12 @@ fun rememberClock(now: Long): Pair<String, String> {
     }
 }
 
-/** Home header: greeting, large time and date. */
+/**
+ * Home header: greeting, then the time and date in the chosen clock style
+ * (see ClockStyles.kt; the style is picked in Control Center > Clock).
+ */
 @Composable
-fun HomeHeader(name: String, modifier: Modifier) {
+fun HomeHeader(name: String, modifier: Modifier, style: Int = ClockStyle.CLASSIC) {
     val now = rememberNow()
     val hour = remember(now / 60000) { java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY) }
     val plain = when (hour) {
@@ -167,8 +170,7 @@ fun HomeHeader(name: String, modifier: Modifier) {
     val (time, date) = rememberClock(now)
     Column(modifier) {
         BasicText(greeting, style = txt(white, 17.sp, FontWeight.SemiBold).copy(shadow = headerShadow))
-        BasicText(time, style = txt(white, 64.sp, FontWeight.Bold).copy(shadow = headerShadow, letterSpacing = (-1).sp))
-        BasicText(date, style = txt(white.copy(alpha = 0.9f), 18.sp, FontWeight.Medium).copy(shadow = headerShadow))
+        ClockBody(style, now, time, date)
     }
 }
 
