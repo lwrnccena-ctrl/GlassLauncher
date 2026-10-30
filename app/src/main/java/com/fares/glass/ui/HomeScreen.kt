@@ -517,7 +517,7 @@ fun HomeScreen(
                 openLocation()
             }
             AndroidKey.KEYCODE_BACK, AndroidKey.KEYCODE_DPAD_LEFT, AndroidKey.KEYCODE_DPAD_RIGHT,
-            AndroidKey.KEYCODE_MENU -> if (first) forecastOpen = false
+            AndroidKey.KEYCODE_MENU, AndroidKey.KEYCODE_PROG_BLUE -> if (first) forecastOpen = false
         }
         return true
     }
@@ -662,6 +662,14 @@ fun HomeScreen(
             }
             AndroidKey.KEYCODE_MEDIA_NEXT -> if (down && !NowPlaying.next()) return false
             AndroidKey.KEYCODE_MEDIA_PREVIOUS -> if (down && !NowPlaying.previous()) return false
+            // Blue button: opens the weather panel (from the home screen and the top row).
+            AndroidKey.KEYCODE_PROG_BLUE -> {
+                if (forecastDays.isEmpty() || (state.mode != Mode.Browse && state.mode != Mode.Top)) return false
+                if (down && e.repeatCount == 0) {
+                    forecastDay = 0
+                    forecastOpen = true
+                }
+            }
             else -> return false
         }
         return true
