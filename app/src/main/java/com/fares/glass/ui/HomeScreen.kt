@@ -8,6 +8,7 @@ import android.os.Build
 import android.view.KeyEvent as AndroidKey
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -66,6 +67,8 @@ import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -105,6 +108,9 @@ private val DockHeight = Metrics.TileH + 36.dp
 
 /** Top padding of the greeting column. */
 private val HeaderTop = 30.dp
+
+/** Time curve of the weather panel opening (the edges add their own ease on top of it). */
+private val IslandEasing = CubicBezierEasing(0.215f, 0.61f, 0.355f, 1f)
 
 /** A white outline around something that is selected (it does not change the layout). */
 private fun Modifier.focusOutline(on: Boolean): Modifier = if (!on) this else drawBehind {
@@ -173,12 +179,13 @@ fun HomeScreen(
     var inputOpen by remember { mutableStateOf(false) }
     var inputIndex by remember { mutableIntStateOf(0) }
     var inputs by remember { mutableStateOf<List<InputSources.Source>>(emptyList()) }
-    // Weather: Up to the greeting, then Right selects the weather text; OK opens the forecast of the next days.
+    // Weather: Up to the greeting, then Right selects the weather text; OK opens the weather panel.
     var weatherFocus by remember { mutableStateOf(false) }
     var forecastOpen by remember { mutableStateOf(false) }
+    // Selected day in the weather panel; one past the last day is the "Change location" row.
     var forecastDay by remember { mutableIntStateOf(0) }
-    var forecastHours by remember { mutableStateOf(false) }
-    var hourIndex by remember { mutableIntStateOf(0) }
+    // Where the small weather text sits on the screen: the weather panel grows out of it.
+    var weatherBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     val forecastDays = weather
         ?.takeIf { !it.isPlaceholder && it.place.isNotBlank() && Features.weather }
         ?.days.orEmpty()
@@ -320,6 +327,16 @@ fun HomeScreen(
     val ccShown by remember { derivedStateOf { ccAnim.value > 0.001f } }
     val ccReveal = remember { CcReveal({ ccAnim.value }, { state.mode == Mode.Control }) }
 
+    // Weather panel open / close progress (0 = the small pill, 1 = the whole screen). Like the Control
+    // Center, it is only read while drawing, so the animation never recomposes this big screen.
+    val islandOpen = forecastOpen && forecastDays.isNotEmpty()
+    val islandAnim = animateFloatAsState(
+        if (islandOpen) 1f else 0f,
+        tween(if (islandOpen) 780 else 340, easing = IslandEasing),
+        label = "island",
+    )
+    val islandShown by remember { derivedStateOf { islandAnim.value > 0.001f } }
+
     val focused = apps.getOrNull(state.focus)
     val ambience = if (repo.topShelf && row == 0 && state.mode == Mode.Browse) {
         focused?.let { repo.visuals[it.pkg]?.ambience }
@@ -386,9 +403,8 @@ fun HomeScreen(
             Mode.Top -> when {
                 weatherFocus -> {
                     if (forecastDays.isNotEmpty()) {
-                        // The forecast of the next days (its last row changes the location).
+                        // The weather panel grows out of the weather text (its last row changes the location).
                         forecastDay = 0
-                        forecastHours = false
                         forecastOpen = true
                     } else {
                         // No forecast (location unavailable): go straight to the city picker.
@@ -487,38 +503,21 @@ fun HomeScreen(
         return true
     }
 
-    /** Keys while the forecast list is showing. */
+    /** Keys while the weather panel is showing: Up / Down pick a day, OK on the last row changes the location. */
     fun forecastKey(e: AndroidKey): Boolean {
         val down = e.action == AndroidKey.ACTION_DOWN
         val first = down && e.repeatCount == 0
-        val slots = forecastDays.getOrNull(forecastDay)?.hours?.count { it.hour % 3 == 0 } ?: 0
         when (e.keyCode) {
-            AndroidKey.KEYCODE_DPAD_UP -> if (down) {
-                if (forecastHours) hourIndex = (hourIndex - 1).coerceAtLeast(0)
-                else forecastDay = (forecastDay - 1).coerceAtLeast(0)
-            }
-            AndroidKey.KEYCODE_DPAD_DOWN -> if (down) {
-                if (forecastHours) hourIndex = (hourIndex + 1).coerceAtMost((slots - 1).coerceAtLeast(0))
-                else forecastDay = (forecastDay + 1).coerceAtMost(forecastDays.size) // the last row is "Change location"
-            }
-            // OK on a day shows its hours; OK again goes back to the days.
+            AndroidKey.KEYCODE_DPAD_UP -> if (down) forecastDay = (forecastDay - 1).coerceAtLeast(0)
+            // The last row is "Change location".
+            AndroidKey.KEYCODE_DPAD_DOWN -> if (down) forecastDay = (forecastDay + 1).coerceAtMost(forecastDays.size)
             AndroidKey.KEYCODE_DPAD_CENTER, AndroidKey.KEYCODE_ENTER, AndroidKey.KEYCODE_NUMPAD_ENTER,
-            AndroidKey.KEYCODE_BUTTON_A -> if (first) {
-                if (forecastDay >= forecastDays.size) {
-                    forecastOpen = false
-                    openLocation()
-                } else if (forecastHours) {
-                    forecastHours = false
-                } else {
-                    hourIndex = 0
-                    forecastHours = true
-                }
+            AndroidKey.KEYCODE_BUTTON_A -> if (first && forecastDay >= forecastDays.size) {
+                forecastOpen = false
+                openLocation()
             }
-            AndroidKey.KEYCODE_BACK, AndroidKey.KEYCODE_DPAD_LEFT, AndroidKey.KEYCODE_MENU ->
-                if (first) {
-                    if (forecastHours) forecastHours = false else forecastOpen = false
-                }
-            AndroidKey.KEYCODE_DPAD_RIGHT -> if (first) forecastOpen = false
+            AndroidKey.KEYCODE_BACK, AndroidKey.KEYCODE_DPAD_LEFT, AndroidKey.KEYCODE_DPAD_RIGHT,
+            AndroidKey.KEYCODE_MENU -> if (first) forecastOpen = false
         }
         return true
     }
@@ -682,9 +681,15 @@ fun HomeScreen(
     ) {
         // ---- The whole home screen (wallpaper, clock, dock, apps, panels) is one "scene". ----
         // It is recorded so a snapshot can be taken, and it is blurred while the recent apps are open.
+        // It also grows a little while the weather panel opens over it.
         Box(
             Modifier
                 .fillMaxSize()
+                .graphicsLayer {
+                    val s = 1f + 0.04f * islandAnim.value
+                    scaleX = s
+                    scaleY = s
+                }
                 .then(sceneBlur)
                 .drawWithContent {
                     sceneLayer.record { this@drawWithContent.drawContent() }
@@ -745,7 +750,13 @@ fun HomeScreen(
                         if (weather != null && Features.weather) {
                             Spacer(Modifier.width(28.dp))
                             // The weather text is outlined while it is selected (Right from the greeting).
-                            Box(Modifier.focusOutline(weatherFocus)) { WeatherWidget(weather) }
+                            // While the weather panel is open, the panel draws this text itself.
+                            Box(
+                                Modifier
+                                    .graphicsLayer { alpha = if (islandAnim.value > 0.001f) 0f else 1f }
+                                    .focusOutline(weatherFocus)
+                                    .onGloballyPositioned { if (!islandShown) weatherBounds = it.boundsInRoot() },
+                            ) { WeatherWidget(weather) }
                         }
                     }
                     if (Features.verse) {
@@ -888,11 +899,12 @@ fun HomeScreen(
                 Modifier.align(Alignment.TopEnd).padding(top = 84.dp, end = Metrics.Margin),
             )
         }
-        // Forecast of the next days, under the weather text.
-        if (forecastOpen && forecastDays.isNotEmpty()) {
-            ForecastMenu(
-                backdrop, forecastDays, forecastDay, forecastHours, hourIndex,
-                Modifier.align(Alignment.TopStart).padding(start = Metrics.Margin + 240.dp, top = 96.dp),
+        // The weather panel: it grows out of the small weather text and fills the screen.
+        // It stays composed until the closing animation has finished.
+        if (islandShown && weather != null && forecastDays.isNotEmpty()) {
+            WeatherIsland(
+                weather, forecastDays, forecastDay, weatherBounds,
+                progress = { islandAnim.value },
             )
         }
         // The city picker.
