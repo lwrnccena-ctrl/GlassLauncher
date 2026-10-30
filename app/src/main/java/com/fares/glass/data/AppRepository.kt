@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.fares.glass.gfx.AppVisual
 import com.fares.glass.gfx.TileFactory
+import com.fares.glass.ui.ClockStyle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -39,6 +40,9 @@ class AppRepository(context: Context) {
     var wallpaperIndex by mutableIntStateOf(prefs.getInt("wallpaper", 0))
         private set
     var topShelf by mutableStateOf(prefs.getBoolean("topShelf", false))
+        private set
+    /** Which home-screen clock style is used (see ClockStyle): 0 classic, 1 stacked, 2 analog, 3 pill, 4 flip. */
+    var clockStyle by mutableIntStateOf(prefs.getInt("clockStyle", ClockStyle.CLASSIC).coerceIn(0, ClockStyle.COUNT - 1))
         private set
     /** First name in the greeting ("Good morning, Alex"): `am start -n com.fares.glass/.MainActivity --es name Alex`. */
     var userName by mutableStateOf(prefs.getString("name", "").orEmpty())
@@ -125,5 +129,11 @@ class AppRepository(context: Context) {
     fun toggleTopShelf() {
         topShelf = !topShelf
         prefs.edit().putBoolean("topShelf", topShelf).apply()
+    }
+
+    /** Saves the clock style chosen in Control Center > Clock. */
+    fun setClockStyle(style: Int) {
+        clockStyle = style.coerceIn(0, ClockStyle.COUNT - 1)
+        prefs.edit().putInt("clockStyle", clockStyle).apply()
     }
 }
