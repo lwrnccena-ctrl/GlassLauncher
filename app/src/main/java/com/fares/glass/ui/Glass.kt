@@ -7,6 +7,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
@@ -46,9 +47,16 @@ fun Glass(
     tint: Color = Color.White.copy(alpha = 0.07f),
     /** Blurred image to sample when it isn't the wallpaper (Top Shelf ambience). */
     source: ImageBitmap? = null,
+    /**
+     * Where the top-left corner of this glass finally sits on the screen. Pass it when the glass is
+     * scaled or moved by a graphicsLayer animation (the Control Center opening), so the frosted
+     * background stays lined up. Null = measure the position from the layout, as before.
+     */
+    fixedOrigin: Offset? = null,
     content: @Composable BoxScope.() -> Unit = {},
 ) {
     var origin by remember { mutableStateOf(Offset.Zero) }
+    val fixed = rememberUpdatedState(fixedOrigin)
     Box(
         modifier
             .onGloballyPositioned { origin = it.positionInRoot() }
@@ -73,11 +81,12 @@ fun Glass(
                 )
                 val rimWidth = 1.2.dp.toPx()
                 onDrawBehind {
+                    val o = fixed.value ?: origin
                     clipPath(path) {
                         (source ?: backdrop.frosted)?.let { img ->
                             drawImage(
                                 img,
-                                dstOffset = IntOffset(-origin.x.roundToInt(), -origin.y.roundToInt()),
+                                dstOffset = IntOffset(-o.x.roundToInt(), -o.y.roundToInt()),
                                 dstSize = backdrop.screen,
                                 filterQuality = FilterQuality.Low,
                             )
