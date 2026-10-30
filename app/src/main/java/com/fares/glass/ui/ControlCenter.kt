@@ -44,6 +44,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AccessTime
 import androidx.compose.material.icons.rounded.Accessibility
 import androidx.compose.material.icons.rounded.Animation
 import androidx.compose.material.icons.rounded.Apps
@@ -137,7 +138,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.util.Locale
 
-enum class CcPage { Main, Wifi, Bluetooth, Adb, Widgets }
+enum class CcPage { Main, Wifi, Bluetooth, Adb, Widgets, Clock }
 
 /** Narrow, tall sheet, like the tvOS Control Center. */
 val PanelWidth = 300.dp
@@ -257,7 +258,7 @@ private val Purple = Color(0xFFBF5AF2)
  *   Top Shelf   | brightness + volume (two vertical sliders, two rows tall)
  *   Hidden apps | (same sliders)
  *   Wallpaper   | Animations
- *   [ wide Widgets tile, icon only ]
+ *   Widgets tile | Clock tile (two half-width icon-only tiles)
  *   round shortcuts
  *
  * ADB_BTN is the round ADB button at the top right, next to the clock.
@@ -273,6 +274,7 @@ private const val VOLUME = 7
 private const val WIDGETS = 8
 private const val FIRST_SHORTCUT = 9
 private const val ADB_BTN = 100
+private const val CLOCK_BTN = 101
 
 private val SunYellow = Color(0xFFFFD60A)
 
@@ -311,8 +313,8 @@ private val Section.icon: ImageVector
     }
 
 /**
- * tvOS-style Control Center: a grid of modules, a Widgets tile that opens a second page, round
- * shortcuts, and Wi-Fi / Bluetooth / ADB / Widgets pages that slide inside the panel.
+ * tvOS-style Control Center: a grid of modules, Widgets and Clock tiles that open extra pages, round
+ * shortcuts, and Wi-Fi / Bluetooth / ADB / Widgets / Clock pages that slide inside the panel.
  * All remote navigation for it lives here.
  */
 class ControlCenter(
@@ -340,6 +342,8 @@ class ControlCenter(
     var index by mutableIntStateOf(0)
     /** Selected tile on the Widgets page: 0 verse, 1 music, 2 lyrics, 3 weather. */
     var widgetIndex by mutableIntStateOf(0)
+    /** Selected style on the Clock page (see ClockStyle). */
+    var clockIndex by mutableIntStateOf(0)
     /** Selected item on a detail page, identified by its key. */
     var rowKey by mutableStateOf("toggle")
     /** Network whose password is being typed (the on-screen keyboard is open). */
@@ -402,8 +406,10 @@ class ControlCenter(
             CcPage.Main -> 0
             CcPage.Adb -> 0
             CcPage.Widgets -> 0
+            CcPage.Clock -> 0
         }
         widgetIndex = 0
+        clockIndex = repo.clockStyle
         rowKey = "toggle"
         wifi.start()
         bt.start()
@@ -539,6 +545,7 @@ class ControlCenter(
             BRIGHTNESS -> Unit // Up / Down change it
             VOLUME -> levels.toggleMute()
             WIDGETS -> { page = CcPage.Widgets; widgetIndex = 0 }
+            CLOCK_BTN -> { page = CcPage.Clock; clockIndex = repo.clockStyle }
             ADB_BTN -> openAdb()
             else -> open(shortcuts[index - FIRST_SHORTCUT])
         }
@@ -594,18 +601,25 @@ class ControlCenter(
             ANIMATIONS -> when {
                 dx < 0 -> WALLPAPER
                 dy < 0 -> VOLUME
-                dy > 0 -> WIDGETS
+                dy > 0 -> CLOCK_BTN
                 else -> i
             }
             WIDGETS -> when {
+                dx > 0 -> CLOCK_BTN
                 dy < 0 -> WALLPAPER
                 dy > 0 -> FIRST_SHORTCUT + (shortcuts.size / 2).coerceAtMost(shortcuts.lastIndex)
+                else -> i
+            }
+            CLOCK_BTN -> when {
+                dx < 0 -> WIDGETS
+                dy < 0 -> ANIMATIONS
+                dy > 0 -> FIRST_SHORTCUT + shortcuts.lastIndex
                 else -> i
             }
             else -> when {
                 dx < 0 && i > FIRST_SHORTCUT -> i - 1
                 dx > 0 && i < FIRST_SHORTCUT + shortcuts.lastIndex -> i + 1
-                dy < 0 -> WIDGETS
+                dy < 0 -> if (i - FIRST_SHORTCUT > shortcuts.lastIndex / 2) CLOCK_BTN else WIDGETS
                 else -> i
             }
         }
@@ -640,11 +654,37 @@ class ControlCenter(
         }
     }
 
+    // ---- Clock page (second control center: the clock styles) ----
+
+    private fun selectClock() = repo.setClockStyle(clockIndex)
+
+    /** 2-column grid (the last row has one style). Left from the left column goes back to the main page. */
+    private fun moveClock(dx: Int, dy: Int) {
+        val col = clockIndex % 2
+        when {
+            dx < 0 -> if (col == 0) page = CcPage.Main else clockIndex -= 1
+            dx > 0 -> if (col == 0 && clockIndex + 1 < ClockStyle.COUNT) clockIndex += 1
+            dy > 0 -> if (clockIndex + 2 < ClockStyle.COUNT) clockIndex += 2
+            dy < 0 -> if (clockIndex >= 2) clockIndex -= 2
+        }
+    }
+
+    private fun clockName(style: Int): String = str(
+        when (style) {
+            ClockStyle.STACKED -> R.string.clock_stacked
+            ClockStyle.ANALOG -> R.string.clock_analog
+            ClockStyle.PILL -> R.string.clock_pill
+            ClockStyle.FLIP -> R.string.clock_flip
+            else -> R.string.clock_classic
+        },
+    )
+
     // ---- Detail pages ----
 
     private fun rows(): List<Line> = when (page) {
         CcPage.Main -> emptyList()
         CcPage.Widgets -> emptyList()
+        CcPage.Clock -> emptyList()
         CcPage.Wifi -> buildList {
             add(Line.Toggle("Wi-Fi", wifi.enabled))
             if (wifi.enabled) {
@@ -793,6 +833,7 @@ class ControlCenter(
                     when (page) {
                         CcPage.Main -> selectMain()
                         CcPage.Widgets -> selectWidget()
+                        CcPage.Clock -> selectClock()
                         else -> selectDetail()
                     }
                 }
@@ -804,6 +845,7 @@ class ControlCenter(
                 when (page) {
                     CcPage.Main -> moveMain(dx, dy)
                     CcPage.Widgets -> moveWidgets(dx, dy)
+                    CcPage.Clock -> moveClock(dx, dy)
                     else -> if (dx < 0) { page = CcPage.Main; forgetArmed = null } else if (dy != 0) moveDetail(dy)
                 }
             }
@@ -875,6 +917,7 @@ class ControlCenter(
                         when (p) {
                             CcPage.Main -> MainPage(wallpaperName, host, reveal)
                             CcPage.Widgets -> WidgetsPage()
+                            CcPage.Clock -> ClockPage()
                             else -> DetailPage(p)
                         }
                     }
@@ -941,12 +984,22 @@ class ControlCenter(
             }
             Spacer(Modifier.height(8.dp))
 
-            // One wide tile, icon only: opens the Widgets page (verse, music, lyrics, weather).
-            WideIconTile(Icons.Rounded.Dashboard, index == WIDGETS, Modifier.revealFromCorner(host, reveal, 8))
+            // Row 5: Widgets | Clock. Same size and look as the tiles above (icon, title, status).
+            val widgetsOn = listOf(Features.verse, Features.music, Features.lyrics, Features.weather).count { it }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ModuleTile(
+                    Tile(Icons.Rounded.Dashboard, "Widgets", "$widgetsOn/4 on", widgetsOn > 0, Green),
+                    index == WIDGETS, Modifier.weight(1f).revealFromCorner(host, reveal, 8),
+                )
+                ModuleTile(
+                    Tile(Icons.Rounded.AccessTime, str(R.string.cc_clock), clockName(repo.clockStyle), true, WifiBlue),
+                    index == CLOCK_BTN, Modifier.weight(1f).revealFromCorner(host, reveal, 9),
+                )
+            }
 
             Spacer(Modifier.weight(1f))
             Row(
-                Modifier.fillMaxWidth().revealFromCorner(host, reveal, 9),
+                Modifier.fillMaxWidth().revealFromCorner(host, reveal, 10),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 shortcuts.forEachIndexed { k, s -> RoundButton(s.icon, index == FIRST_SHORTCUT + k) }
@@ -956,6 +1009,7 @@ class ControlCenter(
                 when {
                     index == ADB_BTN -> "ADB"
                     index == WIDGETS -> "Widgets"
+                    index == CLOCK_BTN -> str(R.string.cc_clock)
                     index >= FIRST_SHORTCUT -> str(shortcuts[index - FIRST_SHORTCUT].title)
                     else -> " "
                 },
@@ -1002,7 +1056,7 @@ class ControlCenter(
         }
     }
 
-    /** Wide tile with only an icon and no text. */
+    /** Icon-only tile. It fills the width it is given (the full row, or half of it next to another tile). */
     @Composable
     private fun WideIconTile(icon: ImageVector, focused: Boolean, modifier: Modifier = Modifier) {
         val clear = LocalClear.current
@@ -1131,6 +1185,64 @@ class ControlCenter(
                 BasicText(w.title, style = txt(fg, 15.sp, FontWeight.SemiBold), maxLines = 1)
                 BasicText(if (w.on) "On" else "Off", style = txt(fg.copy(alpha = 0.6f), 12.sp, FontWeight.Medium), maxLines = 1)
             }
+        }
+    }
+
+    // ---- Clock page (second control center: the clock styles) ----
+
+    @Composable
+    private fun ClockPage() {
+        val clear = LocalClear.current
+        Column(Modifier.fillMaxSize()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Image(rememberVectorPainter(Icons.Rounded.ChevronLeft), null, Modifier.size(26.dp), colorFilter = ColorFilter.tint(White.copy(alpha = 0.7f)))
+                BasicText(str(R.string.cc_clock), style = txt(White, 24.sp, FontWeight.Bold).shade(clear))
+            }
+            Spacer(Modifier.height(12.dp))
+            for (r in 0 until 3) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (c in 0 until 2) {
+                        val i = r * 2 + c
+                        if (i < ClockStyle.COUNT) {
+                            ClockTile(i, clockIndex == i, repo.clockStyle == i, Modifier.weight(1f))
+                        } else {
+                            Spacer(Modifier.weight(1f))
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+        }
+    }
+
+    /** One clock style: a small preview and its name; a green check marks the style that is in use. */
+    @Composable
+    private fun ClockTile(style: Int, focused: Boolean, selected: Boolean, modifier: Modifier) {
+        val clear = LocalClear.current
+        val f = focusAmount(focused)
+        val fg = lerp(White, Ink, f)
+        val shape = RoundedCornerShape(26.dp)
+        Column(
+            modifier
+                .height(120.dp)
+                .graphicsLayer { scaleX = 1f + 0.05f * f; scaleY = 1f + 0.05f * f }
+                .background(lerp(restFill(clear, 0.10f), White.copy(alpha = 0.95f), f), shape)
+                .glassEdge(clear, f, shape)
+                .padding(12.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                Box(Modifier.weight(1f).height(52.dp), contentAlignment = Alignment.CenterStart) {
+                    ClockMini(style, fg)
+                }
+                if (selected) {
+                    Box(
+                        Modifier.size(22.dp).clip(CircleShape).background(Green),
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(Icons.Rounded.Check, White, 14) }
+                }
+            }
+            BasicText(clockName(style), style = txt(fg, 15.sp, FontWeight.SemiBold), maxLines = 1)
         }
     }
 
