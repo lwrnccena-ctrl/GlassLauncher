@@ -14,11 +14,11 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.widget.FrameLayout
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,7 +36,6 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
@@ -53,8 +53,13 @@ import com.fares.glass.sys.SettingsShortcuts
 import com.fares.glass.sys.SystemInfo
 import com.fares.glass.sys.WifiController
 import com.fares.glass.ui.Backdrop
+import com.fares.glass.ui.CcCloseMs
+import com.fares.glass.ui.CcOpenMs
 import com.fares.glass.ui.CcPage
+import com.fares.glass.ui.CcReveal
 import com.fares.glass.ui.ControlCenter
+import com.fares.glass.ui.PanelEnd
+import com.fares.glass.ui.PanelTop
 import com.fares.glass.ui.Typo
 
 /**
@@ -82,6 +87,9 @@ class GlassOverlayService : AccessibilityService() {
 
         /** Panel background (ARGB). Lower the first two hex digits (E0) for more see-through. */
         private const val PANEL_COLOR = 0xE02E2A44.toInt()
+
+        /** The window shrinks back to 1x1 this long after closing (must be longer than CcCloseMs). */
+        private const val HIDE_DELAY_MS = 300L
 
         @Volatile private var instance: GlassOverlayService? = null
 
@@ -183,10 +191,10 @@ class GlassOverlayService : AccessibilityService() {
         if (!shown) return
         shown = false
         visible = false
-        // Wait for the slide-out, then shrink the window back to 1x1 so it doesn't cover the video.
+        // Wait for the close animation, then shrink the window back to 1x1 so it doesn't cover the video.
         val task = Runnable { if (!shown && attached) wm.updateViewLayout(root, hiddenParams()) }
         hideTask = task
-        handler.postDelayed(task, 250)
+        handler.postDelayed(task, HIDE_DELAY_MS)
     }
 
     fun dismissOverlay() {
@@ -214,17 +222,27 @@ class GlassOverlayService : AccessibilityService() {
         val width = resources.displayMetrics.widthPixels
         val font = LocalDensity.current.fontScale
         CompositionLocalProvider(LocalDensity provides Density(width / 960f, font)) {
+            // 0 -> 1 when opening, 1 -> 0 when closing. The panel reads it only while drawing.
+            val progress = animateFloatAsState(
+                targetValue = if (visible) 1f else 0f,
+                animationSpec = tween(if (visible) CcOpenMs else CcCloseMs, easing = LinearEasing),
+                label = "ccReveal",
+            )
+            val reveal = remember { CcReveal(progress = { progress.value }, opening = { visible }) }
+
             Box(Modifier.fillMaxSize()) {
                 AnimatedVisibility(visible, enter = fadeIn(tween(180)), exit = fadeOut(tween(150))) {
                     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)))
                 }
-                AnimatedVisibility(
-                    visible,
-                    modifier = Modifier.align(Alignment.CenterEnd).padding(end = 24.dp),
-                    enter = slideInHorizontally(tween(220)) { it } + fadeIn(tween(160)),
-                    exit = slideOutHorizontally(tween(180)) { it } + fadeOut(tween(120)),
-                ) {
-                    cc.Panel(backdrop, "Home screen", Modifier)
+                // Stays composed until the close animation has finished.
+                if (visible || progress.value > 0f) {
+                    Box(
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = PanelTop, end = PanelEnd),
+                    ) {
+                        cc.Panel(backdrop, "Home screen", reveal, Modifier)
+                    }
                 }
                 cc.PasswordLayer(backdrop) { root.requestFocus() }
             }
