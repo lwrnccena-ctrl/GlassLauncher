@@ -10,6 +10,9 @@ import android.provider.Settings
 import android.view.KeyEvent as AndroidKey
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.Easing
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -94,10 +97,13 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -131,6 +137,89 @@ enum class CcPage { Main, Wifi, Bluetooth, Adb, Widgets }
 /** Narrow, tall sheet, like the tvOS Control Center. */
 val PanelWidth = 300.dp
 val PanelHeight = 516.dp
+
+/** Where the panel sits on the screen (HomeScreen places it with these, the animation needs them too). */
+val PanelTop = 12.dp
+val PanelEnd = 24.dp
+
+// ---- Open / close animation: the panel and its tiles grow out of the top-right corner ----
+
+/** Opening takes this long in total (panel + the last tile to arrive). Closing is much faster. */
+const val CcOpenMs = 720
+const val CcCloseMs = 260
+
+private const val PanelDelayMs = 30f
+private const val PanelGrowMs = 460f
+private const val PanelFadeDelayMs = 40f
+private const val PanelFadeMs = 240f
+private const val TileDelayMs = 60f
+private const val TileStaggerMs = 26f
+private const val TileGrowMs = 420f
+private const val TileFadeMs = 220f
+private const val StartScale = 0.15f
+private const val PanelStartScale = 0.3f
+
+/** Slight settle at the end, like the second preview. */
+private val GrowEase = CubicBezierEasing(0.2f, 0.85f, 0.25f, 1.12f)
+private val PanelEase = CubicBezierEasing(0.2f, 0.85f, 0.25f, 1.08f)
+private val FadeEase = CubicBezierEasing(0.25f, 0.1f, 0.25f, 1f)
+
+/**
+ * Progress of the open / close animation: 0 -> 1 when opening, 1 -> 0 when closing.
+ * It is read only while drawing, so the animation never recomposes the screen.
+ */
+class CcReveal(val progress: () -> Float, val opening: () -> Boolean)
+
+/** Local progress (0..1, eased) of one piece of the timeline. [t] is the overall progress. */
+private fun stage(t: Float, delayMs: Float, durMs: Float, ease: Easing): Float =
+    ease.transform(((t * CcOpenMs - delayMs) / durMs).coerceIn(0f, 1f))
+
+/** The content area of the panel: the top-right corner of this box is the point everything grows out of. */
+private class CornerHost {
+    var coords by mutableStateOf<LayoutCoordinates?>(null)
+}
+
+private class OwnCoords {
+    var value by mutableStateOf<LayoutCoordinates?>(null)
+}
+
+/**
+ * Makes this element grow out of the panel's top-right corner (scale + fade), later for elements
+ * that are farther along [order]. Only scale and alpha are animated, so it stays smooth on a TV.
+ */
+@Composable
+private fun Modifier.revealFromCorner(host: CornerHost, reveal: CcReveal, order: Int): Modifier {
+    val own = remember { OwnCoords() }
+    return this
+        // This sits outside the graphicsLayer below, so its position ignores the animation.
+        .onGloballyPositioned { own.value = it }
+        .graphicsLayer {
+            val t = reveal.progress()
+            val scale: Float
+            val fade: Float
+            if (reveal.opening()) {
+                val delay = TileDelayMs + order * TileStaggerMs
+                scale = StartScale + (1f - StartScale) * stage(t, delay, TileGrowMs, GrowEase)
+                fade = stage(t, delay, TileFadeMs, FadeEase)
+            } else {
+                scale = StartScale + (1f - StartScale) * FastOutSlowInEasing.transform(t.coerceIn(0f, 1f))
+                fade = t
+            }
+            // Pivot = the panel's top-right corner, expressed in this element's own size.
+            val h = host.coords
+            val c = own.value
+            if (h != null && c != null && h.isAttached && c.isAttached && c.size.width > 0 && c.size.height > 0) {
+                val p = h.localPositionOf(c, Offset.Zero)
+                transformOrigin = TransformOrigin(
+                    (h.size.width - p.x) / c.size.width,
+                    -p.y / c.size.height,
+                )
+            }
+            scaleX = scale
+            scaleY = scale
+            alpha = fade.coerceIn(0f, 1f)
+        }
+}
 
 private val Ink = Color(0xFF111114)
 private val White = Color.White
@@ -702,9 +791,44 @@ class ControlCenter(
 
     // ---- Rendering ----
 
+    /**
+     * The panel. [reveal] drives the open / close animation: the whole panel grows out of its
+     * top-right corner (with the background already blurring behind it), then the tiles spread
+     * out one after another. Closing is the same in reverse, but faster.
+     */
     @Composable
-    fun Panel(backdrop: Backdrop, wallpaperName: String, modifier: Modifier) {
-        Glass(backdrop, modifier.size(PanelWidth, PanelHeight), RoundedCornerShape(36.dp), tint = White.copy(alpha = 0.08f)) {
+    fun Panel(backdrop: Backdrop, wallpaperName: String, reveal: CcReveal, modifier: Modifier) {
+        val density = LocalDensity.current
+        val host = remember { CornerHost() }
+        // Final top-left corner of the panel on the screen, so the frosted glass stays lined up while it scales.
+        val finalOrigin = with(density) {
+            Offset(backdrop.screen.width - (PanelWidth + PanelEnd).toPx(), PanelTop.toPx())
+        }
+        Glass(
+            backdrop,
+            modifier
+                .size(PanelWidth, PanelHeight)
+                .graphicsLayer {
+                    val t = reveal.progress()
+                    val grow: Float
+                    val fade: Float
+                    if (reveal.opening()) {
+                        grow = stage(t, PanelDelayMs, PanelGrowMs, PanelEase)
+                        fade = stage(t, PanelFadeDelayMs, PanelFadeMs, FadeEase)
+                    } else {
+                        grow = FastOutSlowInEasing.transform(t.coerceIn(0f, 1f))
+                        fade = t
+                    }
+                    val s = PanelStartScale + (1f - PanelStartScale) * grow
+                    scaleX = s
+                    scaleY = s
+                    alpha = fade.coerceIn(0f, 1f)
+                    transformOrigin = TransformOrigin(1f, 0f)
+                },
+            RoundedCornerShape(36.dp),
+            tint = White.copy(alpha = 0.08f),
+            fixedOrigin = finalOrigin,
+        ) {
             AnimatedContent(
                 page,
                 transitionSpec = {
@@ -714,9 +838,14 @@ class ControlCenter(
                 },
                 label = "ccPage",
             ) { p ->
-                Box(Modifier.fillMaxSize().padding(16.dp)) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .padding(16.dp)
+                        .onGloballyPositioned { host.coords = it },
+                ) {
                     when (p) {
-                        CcPage.Main -> MainPage(wallpaperName)
+                        CcPage.Main -> MainPage(wallpaperName, host, reveal)
                         CcPage.Widgets -> WidgetsPage()
                         else -> DetailPage(p)
                     }
@@ -726,12 +855,15 @@ class ControlCenter(
     }
 
     @Composable
-    private fun MainPage(wallpaperName: String) {
+    private fun MainPage(wallpaperName: String, host: CornerHost, reveal: CcReveal) {
         val (time, date) = rememberClock(rememberNow())
         val tiles = tiles(wallpaperName)
         Column(Modifier.fillMaxSize()) {
             // Clock on the left, round ADB button on the right.
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            Row(
+                Modifier.fillMaxWidth().revealFromCorner(host, reveal, 0),
+                verticalAlignment = Alignment.Top,
+            ) {
                 Column(Modifier.weight(1f)) {
                     BasicText(time, style = txt(White, 28.sp, FontWeight.Bold))
                     BasicText(date, style = txt(White.copy(alpha = 0.7f), 13.sp, FontWeight.Medium))
@@ -742,19 +874,22 @@ class ControlCenter(
 
             // Row 1: Wi-Fi | Bluetooth
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ModuleTile(tiles[WIFI], index == WIFI, Modifier.weight(1f))
-                ModuleTile(tiles[BLUETOOTH], index == BLUETOOTH, Modifier.weight(1f))
+                ModuleTile(tiles[WIFI], index == WIFI, Modifier.weight(1f).revealFromCorner(host, reveal, 2))
+                ModuleTile(tiles[BLUETOOTH], index == BLUETOOTH, Modifier.weight(1f).revealFromCorner(host, reveal, 1))
             }
             Spacer(Modifier.height(8.dp))
 
             // Rows 2-3: Top Shelf / Hidden apps on the left, two vertical sliders on the right.
             Row(Modifier.fillMaxWidth().height(TileHeight * 2 + 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ModuleTile(tiles[TOP_SHELF], index == TOP_SHELF, Modifier.fillMaxWidth())
-                    ModuleTile(tiles[HIDDEN], index == HIDDEN, Modifier.fillMaxWidth())
+                    ModuleTile(tiles[TOP_SHELF], index == TOP_SHELF, Modifier.fillMaxWidth().revealFromCorner(host, reveal, 4))
+                    ModuleTile(tiles[HIDDEN], index == HIDDEN, Modifier.fillMaxWidth().revealFromCorner(host, reveal, 5))
                 }
                 // Up / Down change the level, OK on the volume mutes.
-                Row(Modifier.weight(1f).fillMaxHeight(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    Modifier.weight(1f).fillMaxHeight().revealFromCorner(host, reveal, 3),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     VerticalLevelSlider(
                         Icons.Rounded.BrightnessHigh, SunYellow, levels.brightness,
                         if (levels.canSetBrightness) null else "No access", index == BRIGHTNESS,
@@ -771,16 +906,19 @@ class ControlCenter(
 
             // Row 4: Wallpaper | Animations
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ModuleTile(tiles[WALLPAPER], index == WALLPAPER, Modifier.weight(1f))
-                ModuleTile(tiles[ANIMATIONS], index == ANIMATIONS, Modifier.weight(1f))
+                ModuleTile(tiles[WALLPAPER], index == WALLPAPER, Modifier.weight(1f).revealFromCorner(host, reveal, 7))
+                ModuleTile(tiles[ANIMATIONS], index == ANIMATIONS, Modifier.weight(1f).revealFromCorner(host, reveal, 6))
             }
             Spacer(Modifier.height(8.dp))
 
             // One wide tile, icon only: opens the Widgets page (verse, music, lyrics, weather).
-            WideIconTile(Icons.Rounded.Dashboard, index == WIDGETS)
+            WideIconTile(Icons.Rounded.Dashboard, index == WIDGETS, Modifier.revealFromCorner(host, reveal, 8))
 
             Spacer(Modifier.weight(1f))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(
+                Modifier.fillMaxWidth().revealFromCorner(host, reveal, 9),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
                 shortcuts.forEachIndexed { k, s -> RoundButton(s.icon, index == FIRST_SHORTCUT + k) }
             }
             Spacer(Modifier.height(6.dp))
@@ -831,10 +969,10 @@ class ControlCenter(
 
     /** Wide tile with only an icon and no text. */
     @Composable
-    private fun WideIconTile(icon: ImageVector, focused: Boolean) {
+    private fun WideIconTile(icon: ImageVector, focused: Boolean, modifier: Modifier = Modifier) {
         val f = focusAmount(focused)
         Box(
-            Modifier
+            modifier
                 .fillMaxWidth()
                 .height(48.dp)
                 .graphicsLayer { scaleX = 1f + 0.04f * f; scaleY = 1f + 0.04f * f }
