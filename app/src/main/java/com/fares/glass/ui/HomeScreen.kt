@@ -332,7 +332,7 @@ fun HomeScreen(
     val islandOpen = forecastOpen && forecastDays.isNotEmpty()
     val islandAnim = animateFloatAsState(
         if (islandOpen) 1f else 0f,
-        tween(if (islandOpen) 780 else 340, easing = IslandEasing),
+        tween(if (islandOpen) 1600 else 700, easing = IslandEasing),
         label = "island",
     )
     val islandShown by remember { derivedStateOf { islandAnim.value > 0.001f } }
