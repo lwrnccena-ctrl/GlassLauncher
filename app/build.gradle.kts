@@ -12,8 +12,8 @@ android {
         // Fire TV Stick 4K (1st gen): Fire OS 6 = Android 7.1 (API 25).
         minSdk = 25
         targetSdk = 36
-        versionCode = 17
-        versionName = "2.3.3"
+        versionCode = 18
+        versionName = "2.3.4"
     }
 
     signingConfigs {
