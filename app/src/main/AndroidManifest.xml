@@ -10,7 +10,7 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
-    <!-- Custom wallpaper and fonts: /sdcard/Glass/ -->
+    <!-- Custom wallpaper, fonts and icons: /sdcard/Glass/ -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
 
     <!-- Control Center: Wi-Fi and Bluetooth managed inside Glass -->
@@ -47,6 +47,16 @@
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <!-- Icon packs (ADW / Nova / GO format) -->
+        <intent>
+            <action android:name="org.adw.launcher.THEMES" />
+        </intent>
+        <intent>
+            <action android:name="com.novalauncher.THEME" />
+        </intent>
+        <intent>
+            <action android:name="com.gau.go.launcherex.theme" />
         </intent>
         <!-- Settings screens offered by the Control Center (depending on the TV) -->
         <intent>
