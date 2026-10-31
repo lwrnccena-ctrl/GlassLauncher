@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.view.KeyEvent as AndroidKey
+import android.widget.Toast
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.CubicBezierEasing
@@ -138,6 +139,8 @@ import com.fares.glass.gfx.Wallpapers
 import com.fares.glass.sys.AdbController
 import com.fares.glass.sys.BluetoothController
 import com.fares.glass.sys.BtKind
+import com.fares.glass.sys.DimOverlay
+import com.fares.glass.sys.QuickActions
 import com.fares.glass.sys.SettingsShortcuts
 import com.fares.glass.sys.SettingsShortcuts.Section
 import com.fares.glass.sys.SystemInfo
@@ -146,6 +149,7 @@ import com.fares.glass.sys.WifiNet
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -286,8 +290,8 @@ private val Purple = Color(0xFFBF5AF2)
  *   Wi-Fi        | Bluetooth
  *   Miracast     | brightness + volume (two vertical sliders, two rows tall)
  *   Hidden apps  | (same sliders)
- *   Screen dim   | Screenshot        (placeholders)
- *   Sleep        | Shutdown          (placeholders)
+ *   Screen dim   | Screenshot
+ *   Sleep        | Shutdown
  *   round buttons (the center one is "Glass settings")
  *
  * ADB_BTN is the round ADB button at the top right, next to the clock.
@@ -423,6 +427,50 @@ class ControlCenter(
     var pairStep by mutableIntStateOf(0)
     var pairText by mutableStateOf("")
     private var pairPort = 0
+
+    // ---- Quick tiles: Screen dim, Screenshot, Sleep, Shutdown ----
+    /** Shutdown needs two presses of OK within 3 seconds. */
+    private var shutdownArmed by mutableStateOf(false)
+    private var armedAt = 0L
+
+    private fun toast(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+
+    private fun quickDim() {
+        scope.launch { QuickActions.toggleDim(context)?.let(::toast) }
+    }
+
+    private fun quickScreenshot() {
+        close() // so the panel is not in the picture
+        scope.launch {
+            val r = QuickActions.screenshot(context)
+            toast(if (r.ok) "Saved: ${r.output}" else "Screenshot failed: ${r.output}")
+        }
+    }
+
+    private fun quickSleep() {
+        close()
+        scope.launch {
+            val r = QuickActions.sleep(context)
+            if (!r.ok) toast("Sleep failed: ${r.output}")
+        }
+    }
+
+    private fun quickShutdown() {
+        val now = System.currentTimeMillis()
+        if (!shutdownArmed) {
+            shutdownArmed = true
+            armedAt = now
+            scope.launch { delay(3000); shutdownArmed = false }
+            return
+        }
+        if (now - armedAt < 500) return // ignore an accidental double press
+        shutdownArmed = false
+        close()
+        scope.launch {
+            val r = QuickActions.shutdown(context)
+            if (!r.ok) toast("Shutdown failed: ${r.output}")
+        }
+    }
 
     val typing get() = passwordFor != null || pairStep != 0
 
@@ -721,6 +769,13 @@ class ControlCenter(
     private fun adbLocation() =
         context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
+    /** Is Glass the launcher the Home button opens? */
+    private fun isDefaultHome(): Boolean {
+        val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        val found = context.packageManager.resolveActivity(i, PackageManager.MATCH_DEFAULT_ONLY)
+        return found?.activityInfo?.packageName == context.packageName
+    }
+
     private fun openAdb() {
         page = CcPage.Adb
         rowKey = "action:connect"
@@ -746,6 +801,21 @@ class ControlCenter(
         adbStatus = "Running…"
         scope.launch {
             val r = AdbController.run(context, command)
+            adbConnected = adbConnected || r.ok
+            adbStatus = if (r.ok) "Done" else r.output
+            adbBusy = false
+            levels.refresh()
+            adbTick++
+        }
+    }
+
+    /** Switches on one of Glass's accessibility services over ADB, keeping the others. */
+    private fun adbEnable(service: String) {
+        if (adbBusy) return
+        adbBusy = true
+        adbStatus = "Enabling…"
+        scope.launch {
+            val r = AdbController.enableAccessibility(context, service)
             adbConnected = adbConnected || r.ok
             adbStatus = if (r.ok) "Done" else r.output
             adbBusy = false
@@ -808,9 +878,9 @@ class ControlCenter(
         )
     }
 
-    /** A tile that does nothing yet. Give it a job in selectMain(). */
-    private fun placeholder(icon: ImageVector, title: String, accent: Color, status: String = "Placeholder") =
-        Tile(icon, title, status, false, accent)
+    /** A quick tile. [active] lights up its icon circle. */
+    private fun placeholder(icon: ImageVector, title: String, accent: Color, status: String = "Placeholder", active: Boolean = false) =
+        Tile(icon, title, status, active, accent)
 
     /** Opens the TV's cast / screen mirroring settings, or Display settings if there is none. */
     private fun openMiracast() {
@@ -835,10 +905,10 @@ class ControlCenter(
             HIDDEN -> repo.unhideAll()
             BRIGHTNESS -> Unit // Up / Down change it
             VOLUME -> levels.toggleMute()
-            DIM -> Unit // placeholder
-            SHOT -> Unit // placeholder
-            SLEEP -> Unit // placeholder
-            SHUTDOWN -> Unit // placeholder
+            DIM -> quickDim()
+            SHOT -> quickScreenshot()
+            SLEEP -> quickSleep()
+            SHUTDOWN -> quickShutdown()
             ADB_BTN -> openAdb()
             else -> {
                 val s = bottom.getOrNull(index - FIRST_BOTTOM)
@@ -848,6 +918,8 @@ class ControlCenter(
     }
 
     private fun moveMain(dx: Int, dy: Int) {
+        // Moving away from Shutdown cancels the "press OK again" confirmation.
+        if (index != SHUTDOWN) shutdownArmed = false
         val i = index
         // The ADB button sits above the first row of tiles.
         if (i == ADB_BTN) {
@@ -981,11 +1053,22 @@ class ControlCenter(
             val secure = adbSecure()
             val listener = adbListener()
             val location = adbLocation()
+            val canWrite = Settings.System.canWrite(context)
+            val homeOn = AdbController.isAccessibilityOn(context, AdbController.HOME_SERVICE)
+            val previewOn = AdbController.isAccessibilityOn(context, AdbController.PREVIEW_SERVICE)
+            val overlayOn = AdbController.isAccessibilityOn(context, AdbController.OVERLAY_SERVICE)
+            val isHome = isDefaultHome()
             add(Line.Action(if (adbConnected) "ADB connected" else "Connect", Icons.Rounded.Terminal, "connect"))
             add(Line.Header("Permissions"))
             add(Line.Cmd("secure", "Secure settings", if (secure) "Granted" else "OK to grant", secure))
             add(Line.Cmd("listener", "Media listener", if (listener) "Allowed" else "OK to allow", listener))
             add(Line.Cmd("location", "Location", if (location) "Granted" else "OK to grant", location))
+            add(Line.Cmd("settings", "Brightness", if (canWrite) "Granted" else "OK to grant", canWrite))
+            add(Line.Header("Services"))
+            add(Line.Cmd("default_home", "Default launcher", if (isHome) "Glass is the default" else "OK to set", isHome))
+            add(Line.Cmd("svc_home", "Home button", if (homeOn) "Enabled" else "OK to enable", homeOn))
+            add(Line.Cmd("svc_preview", "Recent apps previews", if (previewOn) "Enabled" else "OK to enable", previewOn))
+            add(Line.Cmd("svc_overlay", "Control Center overlay", if (overlayOn) "Enabled" else "OK to enable", overlayOn))
             if (adbStatus.isNotEmpty()) add(Line.Note(adbStatus))
         }
         else -> emptyList()
@@ -1053,6 +1136,11 @@ class ControlCenter(
                 "secure" -> adbRun(AdbController.CMD_WRITE_SECURE)
                 "listener" -> adbRun(AdbController.CMD_MEDIA_LISTENER)
                 "location" -> adbRun(AdbController.CMD_LOCATION)
+                "settings" -> adbRun(AdbController.CMD_WRITE_SETTINGS)
+                "default_home" -> adbRun(AdbController.CMD_DEFAULT_HOME)
+                "svc_home" -> adbEnable(AdbController.HOME_SERVICE)
+                "svc_preview" -> adbEnable(AdbController.PREVIEW_SERVICE)
+                "svc_overlay" -> adbEnable(AdbController.OVERLAY_SERVICE)
             }
             is Line.Link -> open(r.section)
             is Line.Pack -> applyIconPack(r.pkg)
@@ -1256,27 +1344,33 @@ class ControlCenter(
             }
             Spacer(Modifier.height(8.dp))
 
-            // Row 4: Screen dim | Screenshot (placeholders)
+            // Row 4: Screen dim | Screenshot
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ModuleTile(
-                    placeholder(Icons.Rounded.BrightnessMedium, "Screen dim", Orange),
+                    placeholder(
+                        Icons.Rounded.BrightnessMedium, "Screen dim", Orange,
+                        if (DimOverlay.on) "On" else "Off", DimOverlay.on,
+                    ),
                     index == DIM, Modifier.weight(1f).revealFromCorner(host, reveal, 7),
                 )
                 ModuleTile(
-                    placeholder(Icons.Rounded.CropFree, "Screenshot", WifiBlue),
+                    placeholder(Icons.Rounded.CropFree, "Screenshot", WifiBlue, "Capture screen"),
                     index == SHOT, Modifier.weight(1f).revealFromCorner(host, reveal, 6),
                 )
             }
             Spacer(Modifier.height(8.dp))
 
-            // Row 5: Sleep | Shutdown (placeholders)
+            // Row 5: Sleep | Shutdown
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ModuleTile(
-                    placeholder(Icons.Rounded.NightsStay, "Sleep", Purple),
+                    placeholder(Icons.Rounded.NightsStay, "Sleep", Purple, "Screen off"),
                     index == SLEEP, Modifier.weight(1f).revealFromCorner(host, reveal, 8),
                 )
                 ModuleTile(
-                    placeholder(Icons.Rounded.PowerSettingsNew, "Shutdown", Color(0xFFFF453A)),
+                    placeholder(
+                        Icons.Rounded.PowerSettingsNew, "Shutdown", Color(0xFFFF453A),
+                        if (shutdownArmed) "Press OK again" else "Power off", shutdownArmed,
+                    ),
                     index == SHUTDOWN, Modifier.weight(1f).revealFromCorner(host, reveal, 9),
                 )
             }
