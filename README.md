@@ -37,14 +37,14 @@ This is a fork of [tlfares/GlassLauncher](https://github.com/tlfares/GlassLaunch
 
 ## What's new in this fork
 
-- **Control Center overlay:** open the Control Center as an overlay on top of other apps, using an Android accessibility service.
+- **Control Center overlay:** open the Control Center as an overlay on top of other apps, using an Android accessibility service.(press yellow button on the remote control to open and close on homescreen or any other app) 
 - **Home override:** an accessibility setting that makes the Home button open Glass.
 - **Weather:** current weather on the home screen.
 - **Recent apps:** jump back to the apps you used last.
 - **Lyrics:** song lyrics for the music that is playing.
 - **Media playback controls:** play, pause and skip from Glass without opening the music app.
 - **Widgets panel:** turn the Verse, Music, Lyrics and Weather widgets on or off from the Control Center.
-- **ADB panel:** shows whether ADB is connected and the status of the secure settings, media listener and location permissions.
+- **ADB panel:** shows whether ADB is connected and the status of the secure settings, media listener and location permissions.(connect instantly using native adb;usb debugging must be on) 
 - **Auto wallpaper:** a wallpaper mode that follows the sky and weather.
 
 ## Install
