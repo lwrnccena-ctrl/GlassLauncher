@@ -70,6 +70,24 @@ class AppRepository(context: Context) {
         }
     }
 
+    /**
+     * Builds every tile again, for example after the icon pack changed. The old tiles stay on screen
+     * until each new one is ready, so nothing flashes.
+     */
+    suspend fun rebuildTiles() = mutex.withLock {
+        for (entry in installed) {
+            val visual = withContext(Dispatchers.IO) {
+                try {
+                    tiles.build(entry)
+                } catch (e: Exception) {
+                    Log.w("Glass", "Can't rebuild tile for ${entry.pkg}", e)
+                    null
+                }
+            } ?: continue
+            visuals[entry.pkg] = visual
+        }
+    }
+
     /** An updated app may have a new banner. */
     fun invalidate(pkg: String) {
         visuals.remove(pkg)
