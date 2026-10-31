@@ -2,6 +2,7 @@ package com.fares.glass.sys
 
 import android.content.Context
 import android.os.Build
+import android.provider.Settings
 import io.github.muntashirakon.adb.AbsAdbConnectionManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -69,6 +70,17 @@ object AdbController {
     const val CMD_WRITE_SECURE = "pm grant $PKG android.permission.WRITE_SECURE_SETTINGS"
     const val CMD_MEDIA_LISTENER = "cmd notification allow_listener $PKG/$PKG.sys.MediaListener"
     const val CMD_LOCATION = "pm grant $PKG android.permission.ACCESS_FINE_LOCATION"
+    /** Lets the brightness slider in the Control Center change the screen brightness. */
+    const val CMD_WRITE_SETTINGS = "appops set $PKG WRITE_SETTINGS allow"
+
+    // Accessibility services declared in the manifest (package/full class name).
+    const val HOME_SERVICE = "$PKG/$PKG.HomeAccessibilityService"          // Home button opens Glass
+    const val PREVIEW_SERVICE = "$PKG/$PKG.sys.GlassAccessibilityService"  // Recent apps screenshots
+    const val OVERLAY_SERVICE = "$PKG/$PKG.GlassOverlayService"            // Control Center over other apps
+
+    /** Makes Glass the default launcher (the second command is a fallback for other builds). */
+    const val CMD_DEFAULT_HOME =
+        "cmd package set-home-activity $PKG/$PKG.MainActivity || pm set-home-activity $PKG/$PKG.MainActivity"
 
     data class Result(val ok: Boolean, val output: String)
 
@@ -123,5 +135,33 @@ object AdbController {
                 }
             } catch (t: Throwable) { Result(false, err(t)) }
         }
+    }
+
+    /** True if the setting entry is this service, written in the full or the short (".Class") form. */
+    private fun sameService(entry: String, service: String): Boolean {
+        val cls = service.substringAfter("/")
+        val short = "$PKG/." + cls.removePrefix("$PKG.")
+        return entry.equals(service, true) || entry.equals(short, true)
+    }
+
+    /** Is this accessibility service switched on? (Readable without any special permission.) */
+    fun isAccessibilityOn(ctx: Context, service: String): Boolean {
+        val raw = Settings.Secure.getString(ctx.contentResolver, "enabled_accessibility_services") ?: return false
+        return raw.split(":").any { sameService(it, service) }
+    }
+
+    /** Turns an accessibility service on without removing the ones that are already on. */
+    suspend fun enableAccessibility(ctx: Context, service: String): Result {
+        val cur = run(ctx, "settings get secure enabled_accessibility_services")
+        if (!cur.ok) return cur
+        val list = cur.output.trim()
+            .takeUnless { it == "null" || it == "Done" }
+            ?.split(":")?.filter { it.isNotBlank() } ?: emptyList()
+        val merged = if (list.any { sameService(it, service) }) list else list + service
+        return run(
+            ctx,
+            "settings put secure enabled_accessibility_services ${merged.joinToString(":")}; " +
+                "settings put secure accessibility_enabled 1",
+        )
     }
 }
