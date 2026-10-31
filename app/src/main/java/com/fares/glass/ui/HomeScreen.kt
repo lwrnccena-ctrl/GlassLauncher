@@ -9,6 +9,7 @@ import android.view.KeyEvent as AndroidKey
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -109,6 +110,12 @@ private val DockHeight = Metrics.TileH + 36.dp
 /** Top padding of the greeting column. */
 private val HeaderTop = 30.dp
 
+/** The media tile sits this far to the left of the Control Center panel. */
+private val MediaTileGap = 14.dp
+
+/** How long (ms) the now playing card takes to fly to the tile when the Control Center opens. */
+private const val MediaFlyMs = 520f
+
 /** Time curve of the weather panel opening (the edges add their own ease on top of it). */
 private val IslandEasing = CubicBezierEasing(0.215f, 0.61f, 0.355f, 1f)
 
@@ -186,6 +193,10 @@ fun HomeScreen(
     var forecastDay by remember { mutableIntStateOf(0) }
     // Where the small weather text sits on the screen: the weather panel grows out of it.
     var weatherBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
+    // Where the now playing card sits on the home screen: it flies from here to the Control Center tile.
+    var cardBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
+    // Width of the screen in pixels (the media tile is placed from the right edge).
+    var screenWpx by remember { mutableIntStateOf(0) }
     val forecastDays = weather
         ?.takeIf { !it.isPlaceholder && it.place.isNotBlank() && Features.weather }
         ?.days.orEmpty()
@@ -267,6 +278,20 @@ fun HomeScreen(
     )
     val ccShown by remember { derivedStateOf { ccAnim.value > 0.001f } }
     val ccReveal = remember { CcReveal({ ccAnim.value }, { state.mode == Mode.Control }) }
+
+    // Progress of the now playing card turning into the Control Center tile (0 = card, 1 = tile).
+    // It is a bit quicker than the whole opening, so the tile has landed when the panel settles.
+    val mediaMorph: () -> Float = {
+        val t = ccAnim.value
+        if (ccOpen) FastOutSlowInEasing.transform((t * CcOpenMs / MediaFlyMs).coerceIn(0f, 1f))
+        else FastOutSlowInEasing.transform(t.coerceIn(0f, 1f))
+    }
+    // The tile is hidden on the wide Personalization page, where the panel would cover it.
+    val tilePageAlpha by animateFloatAsState(
+        if (cc.page == CcPage.Personalization) 0f else 1f, tween(200), label = "tilePage",
+    )
+    // Which button of the tile is selected (-1 = the tile is not selected).
+    val tileFocus = if (ccOpen && cc.page == CcPage.Main && cc.index == CcMediaTile) cc.mediaSub else -1
 
     // Blur behind the recent apps AND behind the Control Center.
     // Android 12+: the whole home screen (wallpaper, greeting, clock, weather, dock, apps) is blurred live.
@@ -704,6 +729,7 @@ fun HomeScreen(
             .background(Color.Black)
             .onSizeChanged {
                 backdrop.screen = it
+                screenWpx = it.width
                 screenHeightDp = with(density) { it.height.toDp().value }
             }
             .focusRequester(focusRequester)
@@ -803,9 +829,16 @@ fun HomeScreen(
                             maxWidth = if (tvWallpaper) maxOf(160.dp, tvLeft - Metrics.Margin - 14.dp) else 420.dp,
                         )
                     }
-                    if (tvWallpaper && state.mode != Mode.Control && Features.music) {
+                    if (tvWallpaper && Features.music) {
+                        // The card stays in the layout while the Control Center is open (just invisible),
+                        // because the flying copy of it takes over from here and lands back here.
                         FitScale(Modifier.weight(1f).padding(top = 10.dp)) {
-                            NowPlayingCard(backdrop, mediaFocus, Modifier)
+                            NowPlayingCard(
+                                backdrop, mediaFocus,
+                                Modifier
+                                    .graphicsLayer { alpha = if (ccShown) 0f else 1f }
+                                    .onGloballyPositioned { if (!ccShown) cardBounds = it.boundsInRoot() },
+                            )
                         }
                     }
                 }
@@ -817,15 +850,17 @@ fun HomeScreen(
                     Modifier.align(Alignment.TopEnd).padding(top = 34.dp, end = Metrics.Margin).graphicsLayer { alpha = headerAlpha },
                     visible = state.mode != Mode.Control,
                 )
-                if (state.mode != Mode.Control) {
-                    // Now playing: visible while a music app is running (playing or paused).
-                    // With the sky wallpaper it sits under the verse instead (see above).
-                    if (!tvWallpaper && Features.music) {
-                        NowPlayingCard(
-                            backdrop, mediaFocus,
-                            Modifier.align(Alignment.TopEnd).padding(top = 84.dp, end = Metrics.Margin).graphicsLayer { alpha = headerAlpha },
-                        )
-                    }
+                // Now playing: visible while a music app is running (playing or paused).
+                // With the sky wallpaper it sits under the verse instead (see above).
+                if (!tvWallpaper && Features.music) {
+                    NowPlayingCard(
+                        backdrop, mediaFocus,
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 84.dp, end = Metrics.Margin)
+                            .graphicsLayer { alpha = headerAlpha * (if (ccShown) 0f else 1f) }
+                            .onGloballyPositioned { if (!ccShown) cardBounds = it.boundsInRoot() },
+                    )
                 }
             }
             if (dockAlpha > 0f) {
@@ -903,6 +938,25 @@ fun HomeScreen(
                 it, null,
                 Modifier.fillMaxSize().graphicsLayer { alpha = frozenAlpha },
                 contentScale = ContentScale.FillBounds, filterQuality = FilterQuality.Low,
+            )
+        }
+
+        // The now playing card flies to the left of the Control Center and turns into the square tile
+        // (and back when it closes). It is drawn outside the blurred scene, so it stays sharp.
+        if (ccShown && Features.music && screenWpx > 0) {
+            val tileRect = with(density) {
+                val side = MediaTileSide.toPx()
+                val right = screenWpx - PanelEnd.toPx() - PanelWidth.toPx() - MediaTileGap.toPx()
+                val top = (PanelTop + 8.dp).toPx()
+                androidx.compose.ui.geometry.Rect(right - side, top, right, top + side)
+            }
+            MediaMorph(
+                backdrop = backdrop,
+                progress = mediaMorph,
+                from = if (cardShown && row == 0) cardBounds else null,
+                to = tileRect,
+                alpha = tilePageAlpha,
+                focus = tileFocus,
             )
         }
 
