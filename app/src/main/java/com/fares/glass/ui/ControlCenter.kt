@@ -39,8 +39,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
@@ -169,7 +172,7 @@ import java.util.Locale
 enum class CcPage { Main, Wifi, Bluetooth, Adb, GlassSettings, Personalization, Widgets, Clock, Icons, Wallpapers }
 
 /** Narrow, tall sheet, like the tvOS Control Center. */
-val PanelWidth = 300.dp
+val PanelWidth = 340.dp
 val PanelHeight = 516.dp
 
 /** The panel gets wider for the Personalization page. */
@@ -230,12 +233,36 @@ private class OwnCoords {
  */
 private val LocalClear = compositionLocalOf { false }
 
-/** Resting fill of a tile: the normal faint white, or a milky white when there is no panel behind it. */
-private fun restFill(clear: Boolean, normal: Float): Color = White.copy(alpha = if (clear) 0.28f else normal)
+/**
+ * Resting fill of a tile. There is no panel behind the tiles any more, so each tile is a thin
+ * sheet of glass: a light see-through white. [glassEdge] adds the sheen and the bright rim on top.
+ */
+private fun restFill(clear: Boolean, normal: Float): Color = White.copy(alpha = 0.16f + normal * 0.5f)
 
-/** Thin light rim around a tile so it stands out over a video. Fades out when the tile is focused. */
-private fun Modifier.glassEdge(clear: Boolean, focus: Float, shape: Shape): Modifier =
-    if (clear) border(1.dp, White.copy(alpha = 0.45f * (1f - focus)), shape) else this
+/**
+ * Liquid-glass finish, drawn on top of the fill: a soft highlight on the top half, a slight darkening
+ * at the bottom (depth, and it keeps white text readable) and a thin bright rim that is strongest at the
+ * top-left, faint in the middle and medium at the bottom-right. Fades out when the tile is focused
+ * (the focused tile turns solid white instead).
+ */
+private fun Modifier.glassEdge(clear: Boolean, focus: Float, shape: Shape): Modifier = this
+    .background(
+        Brush.verticalGradient(
+            0f to White.copy(alpha = 0.20f * (1f - focus)),
+            0.45f to White.copy(alpha = 0.03f * (1f - focus)),
+            1f to Color.Black.copy(alpha = 0.10f * (1f - focus)),
+        ),
+        shape,
+    )
+    .border(
+        1.2.dp,
+        Brush.linearGradient(
+            0f to White.copy(alpha = 0.90f * (1f - 0.7f * focus)),
+            0.5f to White.copy(alpha = 0.12f),
+            1f to White.copy(alpha = 0.55f * (1f - 0.7f * focus)),
+        ),
+        shape,
+    )
 
 /** Soft dark shadow behind text so it stays readable over a bright video. */
 private fun TextStyle.shade(on: Boolean): TextStyle =
@@ -1222,75 +1249,54 @@ class ControlCenter(
     // ---- Rendering ----
 
     /**
-     * The panel. [reveal] drives the open / close animation: the whole panel grows out of its
-     * top-right corner (with the background already blurring behind it), then the tiles spread
-     * out one after another. Closing is the same in reverse, but faster.
+     * The Control Center. There is NO big panel behind it any more: every tile is its own piece of
+     * liquid glass floating over the home screen, like the Apple TV Control Center.
      *
-     * When there is no blurred wallpaper behind it (the Top Shelf video is showing), the big
-     * panel is not drawn at all and the tiles get a milky frosted fill instead.
-     *
-     * The panel is wider on the Personalization page (it grows to the left).
+     * Each page is laid out at its final size and pinned to the top-right corner, so tiles are never
+     * squeezed or clipped when the page changes (for example Glass settings -> Personalization).
+     * [reveal] drives the open / close animation: the tiles grow out of the top-right corner one after
+     * another (see revealFromCorner); here the whole thing only fades in and out.
      */
     @Composable
     fun Panel(backdrop: Backdrop, wallpaperName: String, reveal: CcReveal, modifier: Modifier) {
-        val density = LocalDensity.current
         val host = remember { CornerHost() }
-        val clear = backdrop.frosted == null
-        val wide = page == CcPage.Personalization
-        val panelW by animateDpAsState(if (wide) PersonalWidth else PanelWidth, tween(320, easing = FastOutSlowInEasing), label = "ccW")
-        val panelH by animateDpAsState(if (wide) PersonalHeight else PanelHeight, tween(320, easing = FastOutSlowInEasing), label = "ccH")
-        // Final top-left corner of the panel on the screen, so the frosted glass stays lined up while it scales.
-        val finalOrigin = with(density) {
-            Offset(backdrop.screen.width - (panelW + PanelEnd).toPx(), PanelTop.toPx())
-        }
-        CompositionLocalProvider(LocalClear provides clear) {
-            Glass(
-                backdrop,
+        CompositionLocalProvider(LocalClear provides true) {
+            Box(
                 modifier
-                    .size(panelW, panelH)
+                    .size(PersonalWidth, maxOf(PanelHeight, PersonalHeight))
                     .graphicsLayer {
                         val t = reveal.progress()
-                        val grow: Float
-                        val fade: Float
-                        if (reveal.opening()) {
-                            grow = stage(t, PanelDelayMs, PanelGrowMs, PanelEase)
-                            fade = stage(t, PanelFadeDelayMs, PanelFadeMs, FadeEase)
-                        } else {
-                            grow = FastOutSlowInEasing.transform(t.coerceIn(0f, 1f))
-                            fade = t
-                        }
-                        val s = PanelStartScale + (1f - PanelStartScale) * grow
-                        scaleX = s
-                        scaleY = s
+                        val fade = if (reveal.opening()) stage(t, PanelFadeDelayMs, PanelFadeMs, FadeEase) else t
                         alpha = fade.coerceIn(0f, 1f)
-                        transformOrigin = TransformOrigin(1f, 0f)
                     },
-                RoundedCornerShape(36.dp),
-                tint = White.copy(alpha = 0.08f),
-                fixedOrigin = finalOrigin,
-                showPanel = !clear,
             ) {
                 AnimatedContent(
                     page,
+                    modifier = Modifier.fillMaxSize(),
                     transitionSpec = {
                         val forward = targetState.ordinal > initialState.ordinal
-                        (slideInHorizontally(tween(260)) { if (forward) it / 3 else -it / 3 } + fadeIn(tween(200))) togetherWith
-                            (slideOutHorizontally(tween(220)) { if (forward) -it / 3 else it / 3 } + fadeOut(tween(160)))
+                        // The old page fades out quickly before the new one fades in, so they don't overlap.
+                        (slideInHorizontally(tween(260)) { if (forward) it / 4 else -it / 4 } + fadeIn(tween(200, delayMillis = 90))) togetherWith
+                            (slideOutHorizontally(tween(220)) { if (forward) -it / 4 else it / 4 } + fadeOut(tween(110)))
                     },
                     label = "ccPage",
                 ) { p ->
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .padding(16.dp)
-                            .onGloballyPositioned { host.coords = it },
-                    ) {
-                        when (p) {
-                            CcPage.Main -> MainPage(host, reveal)
-                            CcPage.GlassSettings -> GlassSettingsPage()
-                            CcPage.Personalization -> PersonalizationPage()
-                            CcPage.Wifi, CcPage.Bluetooth, CcPage.Adb -> DetailPage(p)
-                            else -> Unit
+                    val pageW = if (p == CcPage.Personalization) PersonalWidth else PanelWidth
+                    val pageH = if (p == CcPage.Personalization) PersonalHeight else PanelHeight
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopEnd) {
+                        Box(
+                            Modifier
+                                .requiredSize(pageW, pageH)
+                                .padding(8.dp)
+                                .onGloballyPositioned { host.coords = it },
+                        ) {
+                            when (p) {
+                                CcPage.Main -> MainPage(host, reveal)
+                                CcPage.GlassSettings -> GlassSettingsPage()
+                                CcPage.Personalization -> PersonalizationPage()
+                                CcPage.Wifi, CcPage.Bluetooth, CcPage.Adb -> DetailPage(p)
+                                else -> Unit
+                            }
                         }
                     }
                 }
@@ -1420,33 +1426,35 @@ class ControlCenter(
     private fun focusAmount(focused: Boolean) =
         animateFloatAsState(if (focused) 1f else 0f, spring(stiffness = 650f), label = "focus").value
 
+    /** A capsule of liquid glass: round icon on the left, title and status on the right. */
     @Composable
     private fun ModuleTile(t: Tile, focused: Boolean, modifier: Modifier) {
         val clear = LocalClear.current
         val f = focusAmount(focused)
         val fg = lerp(White, Ink, f)
-        val shape = RoundedCornerShape(24.dp)
-        Column(
+        val shape = RoundedCornerShape(32.dp)
+        Row(
             modifier
                 .height(TileHeight)
-                .graphicsLayer { scaleX = 1f + 0.06f * f; scaleY = 1f + 0.06f * f }
+                .graphicsLayer { scaleX = 1f + 0.05f * f; scaleY = 1f + 0.05f * f }
                 .background(lerp(restFill(clear, 0.10f), White.copy(alpha = 0.95f), f), shape)
                 .glassEdge(clear, f, shape)
-                .padding(horizontal = 11.dp, vertical = 5.dp),
-            verticalArrangement = Arrangement.SpaceBetween,
+                .padding(start = 10.dp, end = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
-                Modifier.size(24.dp).clip(CircleShape).background(
-                    if (t.active) t.accent else lerp(White.copy(alpha = 0.16f), Ink.copy(alpha = 0.08f), f),
+                Modifier.size(32.dp).clip(CircleShape).background(
+                    if (t.active) t.accent else lerp(White.copy(alpha = 0.22f), Ink.copy(alpha = 0.08f), f),
                 ),
                 contentAlignment = Alignment.Center,
             ) {
-                Image(rememberVectorPainter(t.icon), null, Modifier.size(14.dp),
+                Image(rememberVectorPainter(t.icon), null, Modifier.size(17.dp),
                     colorFilter = ColorFilter.tint(if (t.active) White else fg))
             }
-            Column {
-                BasicText(t.title, style = txt(fg, 13.sp, FontWeight.SemiBold), maxLines = 1)
-                BasicText(t.status, style = txt(fg.copy(alpha = 0.6f), 11.sp, FontWeight.Medium), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.width(9.dp))
+            Column(Modifier.weight(1f)) {
+                BasicText(t.title, style = txt(fg, 13.sp, FontWeight.SemiBold).shade(f < 0.5f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                BasicText(t.status, style = txt(fg.copy(alpha = 0.65f), 11.sp, FontWeight.Medium).shade(f < 0.5f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -1462,15 +1470,15 @@ class ControlCenter(
         val clear = LocalClear.current
         val f = focusAmount(focused)
         val fill by animateFloatAsState(percent / 100f, tween(120), label = "levelFill")
-        val shape = RoundedCornerShape(24.dp)
-        val edge = maxOf(0.9f * f, if (clear) 0.45f else 0f)
+        val shape = RoundedCornerShape(30.dp)
         Box(
             modifier
                 .fillMaxHeight()
                 .graphicsLayer { scaleX = 1f + 0.04f * f; scaleY = 1f + 0.03f * f }
                 .clip(shape)
                 .background(lerp(restFill(clear, 0.12f), White.copy(alpha = 0.34f), f))
-                .border(if (f > 0.5f) 2.dp else 1.dp, White.copy(alpha = edge), shape),
+                .glassEdge(clear, f, shape)
+                .border(2.dp, White.copy(alpha = 0.9f * f), shape),
         ) {
             Box(
                 Modifier
