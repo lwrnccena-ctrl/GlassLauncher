@@ -25,11 +25,13 @@ class AppVisual(
 
 /**
  * Builds a tvOS-format (5:3) tile image from the app's own artwork:
+ * 0. a custom icon (selected icon pack, or /sdcard/Glass/icons/<package>.png);
  * 1. the Android TV banner (the app's real rectangular logo), filling the card;
  * 2. otherwise, a logo on a flat background: the card takes that color and the logo sits in the middle;
  * 3. otherwise (detailed or transparent background): the app's logo and name on a white card, like a TV banner.
  */
 class TileFactory(context: Context) {
+    private val ctx: Context = context.applicationContext
     private val pm: PackageManager = context.packageManager
 
     /** Google Sans Flex (OFL, published by Google): the typeface of Google wordmarks such as Chrome. */
@@ -39,13 +41,17 @@ class TileFactory(context: Context) {
 
 
     fun build(e: AppEntry): AppVisual {
-        val info = runCatching { pm.getActivityInfo(ComponentName(e.pkg, e.activity), 0) }.getOrNull()
+        val component = ComponentName(e.pkg, e.activity)
+        val info = runCatching { pm.getActivityInfo(component, 0) }.getOrNull()
         // ComponentInfo.loadBanner falls back to the application banner when the activity has none.
         val banner = info?.loadBanner(pm)
         val icon = info?.loadIcon(pm) ?: pm.defaultActivityIcon
+        // Custom icon chosen by the user (icon pack or sideloaded PNG). Takes priority over the banner.
+        val custom = CustomIcons.get(ctx, component)
         val bmp = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
         when {
+            custom != null -> drawLegacy(canvas, custom, e.label)
             banner != null -> drawBanner(canvas, banner)
             Build.VERSION.SDK_INT >= 26 && icon is AdaptiveIconDrawable -> drawAdaptive(canvas, icon, e.label)
             else -> drawLegacy(canvas, icon, e.label)
