@@ -1,6 +1,7 @@
 package com.fares.glass.ui
 
 import android.Manifest
+import android.app.Activity
 import android.bluetooth.BluetoothAdapter
 import android.content.Context
 import android.content.Intent
@@ -133,6 +134,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fares.glass.R
+import com.fares.glass.UpdateChecker
 import com.fares.glass.data.AppRepository
 import com.fares.glass.gfx.CustomIcons
 import com.fares.glass.gfx.Wallpapers
@@ -611,8 +613,14 @@ class ControlCenter(
         if (!silent) {
             val link = updateUrl
             if (link != null) {
-                // A newer version was found: OK opens its download page.
-                runCatching { onOpen(Intent(Intent.ACTION_VIEW, Uri.parse(link)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                // A newer version was found: OK downloads and installs it inside the app.
+                // If this class was not given an Activity, fall back to the download page.
+                val act = context as? Activity
+                if (act != null) {
+                    UpdateChecker.check(act, showNoUpdate = true)
+                } else {
+                    runCatching { onOpen(Intent(Intent.ACTION_VIEW, Uri.parse(link)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                }
                 return
             }
             updateStatus = "Checking GitHub\u2026"
@@ -624,7 +632,7 @@ class ControlCenter(
             result.onSuccess { (tag, url) ->
                 if (isNewer(tag, local)) {
                     updateUrl = url
-                    updateStatus = "New version $tag available (you have $local). Press OK to open the download page."
+                    updateStatus = "New version $tag available (you have $local). Press OK to update."
                 } else if (!silent) {
                     updateStatus = "You're up to date ($local)."
                 }
