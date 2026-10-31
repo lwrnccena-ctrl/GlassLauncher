@@ -458,7 +458,7 @@ class ControlCenter(
     }
 
     /** Saves the choice, loads the pack, and redraws every tile with it. */
-    private fun setIconPack(pkg: String?) {
+    private fun applyIconPack(pkg: String?) {
         iconPack = pkg
         context.getSharedPreferences("glass_icons", Context.MODE_PRIVATE)
             .edit().putString("icon_pack", pkg).apply()
@@ -881,7 +881,7 @@ class ControlCenter(
                 "location" -> adbRun(AdbController.CMD_LOCATION)
             }
             is Line.Link -> open(r.section)
-            is Line.Pack -> setIconPack(r.pkg)
+            is Line.Pack -> applyIconPack(r.pkg)
             is Line.Wall -> setWallpaper(r.index)
             else -> Unit
         }
