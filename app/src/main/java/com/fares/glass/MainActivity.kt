@@ -32,6 +32,7 @@ import com.fares.glass.data.WifiLocator
 import com.fares.glass.data.Weather
 import com.fares.glass.data.WeatherRepository
 import com.fares.glass.gfx.Blur
+import com.fares.glass.gfx.CustomIcons
 import com.fares.glass.gfx.SkyWallpaper
 import com.fares.glass.gfx.Wallpapers
 import com.fares.glass.sys.BluetoothController
@@ -99,6 +100,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Custom icons: load the icon pack the user picked (if any) before any tile is built.
+        CustomIcons.selectPack(
+            this,
+            getSharedPreferences("glass_icons", Context.MODE_PRIVATE).getString("icon_pack", null),
+        )
         repo = AppRepository(this)
         Typo.load(this)
         Recents.load(this)
