@@ -44,7 +44,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur as blurEffect
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
@@ -52,6 +51,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
@@ -257,18 +257,30 @@ fun HomeScreen(
         }
     }
 
-    // Blur behind the recent apps.
-    // Android 12+: the whole home screen is blurred live.
-    // Android 7-11 can't do that, so one snapshot of the home screen is taken when recents opens,
-    // blurred once with Glass's own Blur, and faded in on top.
+    // Control Center open / close progress (0 = closed, 1 = open). It is only read while drawing
+    // (inside graphicsLayer blocks), so animating it never recomposes this big screen.
+    val ccOpen = state.mode == Mode.Control
+    val ccAnim = animateFloatAsState(
+        if (ccOpen) 1f else 0f,
+        if (ccOpen) tween(CcOpenMs, easing = LinearEasing) else tween(CcCloseMs, easing = LinearEasing),
+        label = "ccReveal",
+    )
+    val ccShown by remember { derivedStateOf { ccAnim.value > 0.001f } }
+    val ccReveal = remember { CcReveal({ ccAnim.value }, { state.mode == Mode.Control }) }
+
+    // Blur behind the recent apps AND behind the Control Center.
+    // Android 12+: the whole home screen (wallpaper, greeting, clock, weather, dock, apps) is blurred live.
+    // Android 7-11 can't do that, so one snapshot of the home screen is taken when recents / Control Center
+    // opens, blurred once with Glass's own Blur, and faded in on top.
     val sceneLayer = rememberGraphicsLayer()
     var frozen by remember { mutableStateOf<ImageBitmap?>(null) }
+    val blurWanted = Recents.open || state.mode == Mode.Control
     val frozenAlpha by animateFloatAsState(
-        if (Recents.open && frozen != null) 1f else 0f, tween(300), label = "frozen",
+        if (blurWanted && frozen != null) 1f else 0f, tween(300), label = "frozen",
     )
-    LaunchedEffect(Recents.open) {
+    LaunchedEffect(blurWanted) {
         if (Build.VERSION.SDK_INT >= 31) return@LaunchedEffect
-        if (Recents.open) {
+        if (blurWanted) {
             try {
                 val shot = sceneLayer.toImageBitmap()
                 frozen = withContext(Dispatchers.Default) {
@@ -284,11 +296,6 @@ fun HomeScreen(
         }
     }
     val recentsMix by animateFloatAsState(if (Recents.open) 1f else 0f, tween(350), label = "recentsMix")
-    val sceneBlur = if (Build.VERSION.SDK_INT >= 31 && recentsMix > 0.01f) {
-        Modifier.blurEffect((24f * recentsMix).dp)
-    } else {
-        Modifier
-    }
 
     // The dock sits low enough that the second row of apps stays below the bottom edge of the screen.
     var screenHeightDp by remember { mutableFloatStateOf(540f) }
@@ -315,17 +322,6 @@ fun HomeScreen(
     val dim by animateFloatAsState(
         if (state.mode == Mode.Control || state.mode == Mode.Menu) 0.3f else 0f, tween(250), label = "dim",
     )
-
-    // Control Center open / close progress (0 = closed, 1 = open). It is only read while drawing
-    // (inside graphicsLayer blocks), so animating it never recomposes this big screen.
-    val ccOpen = state.mode == Mode.Control
-    val ccAnim = animateFloatAsState(
-        if (ccOpen) 1f else 0f,
-        if (ccOpen) tween(CcOpenMs, easing = LinearEasing) else tween(CcCloseMs, easing = LinearEasing),
-        label = "ccReveal",
-    )
-    val ccShown by remember { derivedStateOf { ccAnim.value > 0.001f } }
-    val ccReveal = remember { CcReveal({ ccAnim.value }, { state.mode == Mode.Control }) }
 
     // Weather panel open / close progress (0 = the small pill, 1 = the whole screen). Like the Control
     // Center, it is only read while drawing, so the animation never recomposes this big screen.
@@ -715,8 +711,9 @@ fun HomeScreen(
             .onPreviewKeyEvent(::onKey),
     ) {
         // ---- The whole home screen (wallpaper, clock, dock, apps, panels) is one "scene". ----
-        // It is recorded so a snapshot can be taken, and it is blurred while the recent apps are open.
-        // It also grows a little while the weather panel opens over it.
+        // It is recorded so a snapshot can be taken, and it is blurred while the recent apps or the
+        // Control Center are open. It also grows a little while the weather panel opens over it.
+        // The Control Center panel itself is drawn OUTSIDE this scene, so it stays sharp.
         Box(
             Modifier
                 .fillMaxSize()
@@ -724,8 +721,13 @@ fun HomeScreen(
                     val s = 1f + 0.04f * islandAnim.value
                     scaleX = s
                     scaleY = s
+                    if (Build.VERSION.SDK_INT >= 31) {
+                        // Live blur of everything in the scene (Android 12+).
+                        val mix = maxOf(recentsMix, (ccAnim.value * 1.6f).coerceAtMost(1f))
+                        val px = 24.dp.toPx() * mix
+                        renderEffect = if (px > 0.5f) BlurEffect(px, px) else null
+                    }
                 }
-                .then(sceneBlur)
                 .drawWithContent {
                     sceneLayer.record { this@drawWithContent.drawContent() }
                     drawLayer(sceneLayer)
@@ -807,12 +809,15 @@ fun HomeScreen(
                         }
                     }
                 }
+                // The icon bar always stays composed, so its icons can shrink away when the Control Center
+                // opens and grow back when it closes.
+                IconBar(
+                    backdrop,
+                    if (state.mode == Mode.Top && mediaFocus < 0 && !nameFocus && !weatherFocus) state.topIndex else -1,
+                    Modifier.align(Alignment.TopEnd).padding(top = 34.dp, end = Metrics.Margin).graphicsLayer { alpha = headerAlpha },
+                    visible = state.mode != Mode.Control,
+                )
                 if (state.mode != Mode.Control) {
-                    IconBar(
-                        backdrop,
-                        if (state.mode == Mode.Top && mediaFocus < 0 && !nameFocus && !weatherFocus) state.topIndex else -1,
-                        Modifier.align(Alignment.TopEnd).padding(top = 34.dp, end = Metrics.Margin).graphicsLayer { alpha = headerAlpha },
-                    )
                     // Now playing: visible while a music app is running (playing or paused).
                     // With the sky wallpaper it sits under the verse instead (see above).
                     if (!tvWallpaper && Features.music) {
@@ -872,14 +877,6 @@ fun HomeScreen(
                 HintPill(backdrop, stringResource(R.string.hint_move, focused?.label.orEmpty()), Modifier)
             }
 
-            // Control Center: the panel grows out of the top-right corner, then its tiles spread out
-            // one after another. It stays composed until the (faster) closing animation has finished.
-            if (ccShown) {
-                Box(Modifier.align(Alignment.TopEnd).padding(top = PanelTop, end = PanelEnd)) {
-                    cc.Panel(backdrop, wallpaperName, ccReveal, Modifier)
-                }
-            }
-
             if (focused != null) {
                 val tx = tileX(state.focus).value
                 val ty = tileY(state.focus)
@@ -907,6 +904,15 @@ fun HomeScreen(
                 Modifier.fillMaxSize().graphicsLayer { alpha = frozenAlpha },
                 contentScale = ContentScale.FillBounds, filterQuality = FilterQuality.Low,
             )
+        }
+
+        // Control Center: the panel grows out of the top-right corner, then its tiles spread out
+        // one after another. It sits above the blurred scene, so it stays sharp. It stays composed
+        // until the (faster) closing animation has finished.
+        if (ccShown) {
+            Box(Modifier.align(Alignment.TopEnd).padding(top = PanelTop, end = PanelEnd)) {
+                cc.Panel(backdrop, wallpaperName, ccReveal, Modifier)
+            }
         }
 
         // Recent apps: a cascade of cards (double press of Home, or hold Back).
