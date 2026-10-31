@@ -63,6 +63,7 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SettingsRemote
@@ -72,7 +73,6 @@ import androidx.compose.material.icons.rounded.Subtitles
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Tv
-import androidx.compose.material.icons.rounded.ViewCarousel
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VolumeOff
 import androidx.compose.material.icons.rounded.VolumeUp
@@ -124,6 +124,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fares.glass.R
 import com.fares.glass.data.AppRepository
+import com.fares.glass.gfx.CustomIcons
+import com.fares.glass.gfx.Wallpapers
 import com.fares.glass.sys.AdbController
 import com.fares.glass.sys.BluetoothController
 import com.fares.glass.sys.BtKind
@@ -136,9 +138,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Locale
 
-enum class CcPage { Main, Wifi, Bluetooth, Adb, Widgets, Clock }
+enum class CcPage { Main, Wifi, Bluetooth, Adb, Widgets, Clock, Icons, Wallpapers }
 
 /** Narrow, tall sheet, like the tvOS Control Center. */
 val PanelWidth = 300.dp
@@ -255,7 +258,7 @@ private val Purple = Color(0xFFBF5AF2)
  * Selection numbers on the main page (the numbers 0-5 match the order of the list in tiles()):
  *
  *   Wi-Fi       | Bluetooth
- *   Top Shelf   | brightness + volume (two vertical sliders, two rows tall)
+ *   Icon pack   | brightness + volume (two vertical sliders, two rows tall)
  *   Hidden apps | (same sliders)
  *   Wallpaper   | Animations
  *   Widgets tile | Clock tile (two half-width icon-only tiles)
@@ -265,7 +268,7 @@ private val Purple = Color(0xFFBF5AF2)
  */
 private const val WIFI = 0
 private const val ANIMATIONS = 1
-private const val TOP_SHELF = 2
+private const val ICONS = 2
 private const val HIDDEN = 3
 private const val BLUETOOTH = 4
 private const val WALLPAPER = 5
@@ -278,7 +281,7 @@ private const val CLOCK_BTN = 101
 
 private val SunYellow = Color(0xFFFFD60A)
 
-/** One row of a detail page (Wi-Fi, Bluetooth, ADB). */
+/** One row of a detail page (Wi-Fi, Bluetooth, ADB, Icon pack). */
 private sealed interface Line {
     val focusable: Boolean get() = true
     /** Stable identity: focus follows the item even when the list changes (device found, scan…). */
@@ -294,6 +297,14 @@ private sealed interface Line {
     data class Cmd(val id: String, val title: String, val subtitle: String, val done: Boolean) : Line { override val key get() = "cmd:$id" }
     data class Link(val title: String, val section: Section) : Line { override val key get() = "link" }
     data class Note(val text: String) : Line { override val focusable get() = false; override val key get() = "note:$text" }
+    /** An icon pack choice. pkg = null means "Default" (the apps' own banners and logos). */
+    data class Pack(val pkg: String?, val title: String, val subtitle: String, val selected: Boolean) : Line {
+        override val key get() = "pack:${pkg ?: "default"}"
+    }
+    /** A wallpaper choice. index matches AppRepository.wallpaperIndex (the last one is "Auto"). */
+    data class Wall(val index: Int, val title: String, val selected: Boolean) : Line {
+        override val key get() = "wall:$index"
+    }
 }
 
 private class Tile(val icon: ImageVector, val title: String, val status: String, val active: Boolean, val accent: Color)
@@ -314,7 +325,7 @@ private val Section.icon: ImageVector
 
 /**
  * tvOS-style Control Center: a grid of modules, Widgets and Clock tiles that open extra pages, round
- * shortcuts, and Wi-Fi / Bluetooth / ADB / Widgets / Clock pages that slide inside the panel.
+ * shortcuts, and Wi-Fi / Bluetooth / ADB / Widgets / Clock / Icon pack pages that slide inside the panel.
  * All remote navigation for it lives here.
  */
 class ControlCenter(
@@ -352,6 +363,16 @@ class ControlCenter(
     private var forgetArmed: String? = null
     /** Bumped to re-read memory, storage and animations. */
     var tick by mutableIntStateOf(0)
+
+    // ---- Icon pack state ----
+    /** The icon pack in use (package name), or null for the default. MainActivity loads it before this class is created. */
+    private var iconPack by mutableStateOf(CustomIcons.selectedPack())
+    /** Installed icon packs (package -> label), read when the Icon pack page opens. */
+    private var packs: Map<String, String> = emptyMap()
+
+    // ---- Wallpaper page state ----
+    /** Names of all wallpapers, read when the Wallpaper page opens. The last entry is "Auto". */
+    private var wallpaperNames: List<String> = emptyList()
 
     // ---- ADB state ----
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -407,6 +428,8 @@ class ControlCenter(
             CcPage.Adb -> 0
             CcPage.Widgets -> 0
             CcPage.Clock -> 0
+            CcPage.Icons -> 0
+            CcPage.Wallpapers -> 0
         }
         widgetIndex = 0
         clockIndex = repo.clockStyle
@@ -424,6 +447,53 @@ class ControlCenter(
         pairStep = 0
         pairText = ""
         onClose()
+    }
+
+    // ---- Icon pack ----
+
+    private fun openIcons() {
+        packs = CustomIcons.listPacks(context)
+        rowKey = "pack:${iconPack ?: "default"}"
+        page = CcPage.Icons
+    }
+
+    /** Saves the choice, loads the pack, and redraws every tile with it. */
+    private fun setIconPack(pkg: String?) {
+        iconPack = pkg
+        context.getSharedPreferences("glass_icons", Context.MODE_PRIVATE)
+            .edit().putString("icon_pack", pkg).apply()
+        scope.launch {
+            withContext(Dispatchers.Default) { CustomIcons.selectPack(context, pkg) }
+            repo.rebuildTiles()
+        }
+    }
+
+    // ---- Wallpaper list ----
+
+    private fun openWallpapers() {
+        val count = Wallpapers.count(context)
+        wallpaperNames = List(count + 1) { i ->
+            if (i == count) "Auto (sky & weather)"
+            else runCatching { Wallpapers.name(context, i) }.getOrDefault("Wallpaper ${i + 1}")
+        }
+        rowKey = "wall:${repo.wallpaperIndex % (count + 1)}"
+        page = CcPage.Wallpapers
+    }
+
+    /** Picks one wallpaper. MainActivity only knows "next", so step back one and press "next". */
+    private fun setWallpaper(i: Int) {
+        val n = Wallpapers.count(context) + 1
+        if (repo.wallpaperIndex % n == i) return
+        repo.setWallpaper((i - 1 + n) % n)
+        onNextWallpaper()
+    }
+
+    private fun iconPackLabel(pkg: String?): String {
+        if (pkg == null) return "Default"
+        return packs[pkg] ?: runCatching {
+            val pm = context.packageManager
+            pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+        }.getOrDefault(pkg)
     }
 
     // ---- ADB ----
@@ -518,7 +588,7 @@ class ControlCenter(
                     else -> str(R.string.cc_anim_fast, anim)
                 },
                 anim < 1f, Orange),
-            Tile(Icons.Rounded.ViewCarousel, "Top Shelf", str(if (repo.topShelf) R.string.cc_top_shelf_app else R.string.cc_wallpaper), repo.topShelf, Purple),
+            Tile(Icons.Rounded.Palette, "Icon pack", iconPackLabel(iconPack), iconPack != null, Purple),
             Tile(Icons.Rounded.Visibility, str(R.string.cc_hidden_apps),
                 if (repo.hiddenCount == 0) str(R.string.cc_hidden_none) else str(R.string.cc_hidden_count, repo.hiddenCount),
                 repo.hiddenCount > 0, Green),
@@ -538,10 +608,10 @@ class ControlCenter(
         when (index) {
             WIFI -> { page = CcPage.Wifi; rowKey = "toggle"; askPermissions(); wifi.scan() }
             ANIMATIONS -> { sys.cycleAnimations(); tick++ }
-            TOP_SHELF -> repo.toggleTopShelf()
+            ICONS -> openIcons()
             HIDDEN -> repo.unhideAll()
             BLUETOOTH -> { page = CcPage.Bluetooth; rowKey = "toggle"; askPermissions() }
-            WALLPAPER -> onNextWallpaper()
+            WALLPAPER -> openWallpapers()
             BRIGHTNESS -> Unit // Up / Down change it
             VOLUME -> levels.toggleMute()
             WIDGETS -> { page = CcPage.Widgets; widgetIndex = 0 }
@@ -564,7 +634,7 @@ class ControlCenter(
         index = when (i) {
             WIFI -> when {
                 dx > 0 -> BLUETOOTH
-                dy > 0 -> TOP_SHELF
+                dy > 0 -> ICONS
                 dy < 0 -> ADB_BTN
                 else -> i
             }
@@ -574,7 +644,7 @@ class ControlCenter(
                 dy < 0 -> ADB_BTN
                 else -> i
             }
-            TOP_SHELF -> when {
+            ICONS -> when {
                 dx > 0 -> BRIGHTNESS
                 dy < 0 -> WIFI
                 dy > 0 -> HIDDEN
@@ -582,12 +652,12 @@ class ControlCenter(
             }
             HIDDEN -> when {
                 dx > 0 -> BRIGHTNESS
-                dy < 0 -> TOP_SHELF
+                dy < 0 -> ICONS
                 dy > 0 -> WALLPAPER
                 else -> i
             }
             BRIGHTNESS -> when {
-                dx < 0 -> TOP_SHELF
+                dx < 0 -> ICONS
                 dx > 0 -> VOLUME
                 else -> i
             }
@@ -685,6 +755,20 @@ class ControlCenter(
         CcPage.Main -> emptyList()
         CcPage.Widgets -> emptyList()
         CcPage.Clock -> emptyList()
+        CcPage.Wallpapers -> buildList {
+            val current = repo.wallpaperIndex % wallpaperNames.size.coerceAtLeast(1)
+            wallpaperNames.forEachIndexed { i, name -> add(Line.Wall(i, name, i == current)) }
+        }
+        CcPage.Icons -> buildList {
+            add(Line.Pack(null, "Default", "Each app's own banner or logo", iconPack == null))
+            packs.forEach { (pkg, label) -> add(Line.Pack(pkg, label, pkg, iconPack == pkg)) }
+            add(
+                Line.Note(
+                    if (packs.isEmpty()) "No icon packs installed. You can also put PNG files named <package>.png in /sdcard/Glass/icons/, then pick Default to refresh."
+                    else "You can also put PNG files named <package>.png in /sdcard/Glass/icons/.",
+                ),
+            )
+        }
         CcPage.Wifi -> buildList {
             add(Line.Toggle("Wi-Fi", wifi.enabled))
             if (wifi.enabled) {
@@ -792,6 +876,8 @@ class ControlCenter(
                 "location" -> adbRun(AdbController.CMD_LOCATION)
             }
             is Line.Link -> open(r.section)
+            is Line.Pack -> setIconPack(r.pkg)
+            is Line.Wall -> setWallpaper(r.index)
             else -> Unit
         }
     }
@@ -952,10 +1038,10 @@ class ControlCenter(
             }
             Spacer(Modifier.height(8.dp))
 
-            // Rows 2-3: Top Shelf / Hidden apps on the left, two vertical sliders on the right.
+            // Rows 2-3: Icon pack / Hidden apps on the left, two vertical sliders on the right.
             Row(Modifier.fillMaxWidth().height(TileHeight * 2 + 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ModuleTile(tiles[TOP_SHELF], index == TOP_SHELF, Modifier.fillMaxWidth().revealFromCorner(host, reveal, 4))
+                    ModuleTile(tiles[ICONS], index == ICONS, Modifier.fillMaxWidth().revealFromCorner(host, reveal, 4))
                     ModuleTile(tiles[HIDDEN], index == HIDDEN, Modifier.fillMaxWidth().revealFromCorner(host, reveal, 5))
                 }
                 // Up / Down change the level, OK on the volume mutes.
@@ -1254,7 +1340,7 @@ class ControlCenter(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Image(rememberVectorPainter(Icons.Rounded.ChevronLeft), null, Modifier.size(26.dp), colorFilter = ColorFilter.tint(White.copy(alpha = 0.7f)))
                 BasicText(
-                    when (p) { CcPage.Wifi -> "Wi-Fi"; CcPage.Adb -> "ADB"; else -> "Bluetooth" },
+                    when (p) { CcPage.Wifi -> "Wi-Fi"; CcPage.Adb -> "ADB"; CcPage.Icons -> "Icon pack"; CcPage.Wallpapers -> "Wallpaper"; else -> "Bluetooth" },
                     style = txt(White, 24.sp, FontWeight.Bold).shade(clear),
                 )
             }
@@ -1274,7 +1360,7 @@ class ControlCenter(
             is Line.Header -> BasicText(r.title.uppercase(Locale.getDefault()), Modifier.padding(start = 12.dp, top = 8.dp, bottom = 4.dp),
                 style = txt(White.copy(alpha = 0.55f), 11.sp, FontWeight.SemiBold).shade(clear))
             is Line.Note -> BasicText(r.text, Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                style = txt(White.copy(alpha = 0.6f), 12.sp, FontWeight.Medium).shade(clear), maxLines = 3)
+                style = txt(White.copy(alpha = 0.6f), 12.sp, FontWeight.Medium).shade(clear), maxLines = 4)
             else -> {
                 val f = focusAmount(focused)
                 val fg = lerp(White, Ink, f)
@@ -1330,6 +1416,21 @@ class ControlCenter(
                                 BasicText(r.subtitle, style = txt(fg.copy(alpha = 0.6f), 11.sp, FontWeight.Medium), maxLines = 1)
                             }
                             if (r.done) Icon(Icons.Rounded.Check, if (f > 0.5f) Ink else Green, 18)
+                        }
+                        is Line.Pack -> {
+                            Icon(Icons.Rounded.Palette, fg, 20)
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                BasicText(r.title, style = txt(fg, 14.sp, FontWeight.SemiBold), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                BasicText(r.subtitle, style = txt(fg.copy(alpha = 0.6f), 11.sp, FontWeight.Medium), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            if (r.selected) Icon(Icons.Rounded.Check, if (f > 0.5f) Ink else Green, 18)
+                        }
+                        is Line.Wall -> {
+                            Icon(Icons.Rounded.Wallpaper, fg, 20)
+                            Spacer(Modifier.width(10.dp))
+                            BasicText(r.title, Modifier.weight(1f), style = txt(fg, 14.sp, FontWeight.SemiBold), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (r.selected) Icon(Icons.Rounded.Check, if (f > 0.5f) Ink else Green, 18)
                         }
                         is Line.Link -> {
                             BasicText(r.title, Modifier.weight(1f), style = txt(fg, 13.sp, FontWeight.Medium), maxLines = 1)
