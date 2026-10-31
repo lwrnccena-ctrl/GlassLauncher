@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothAdapter
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.view.KeyEvent as AndroidKey
@@ -13,6 +14,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -51,9 +53,12 @@ import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.BluetoothDisabled
 import androidx.compose.material.icons.rounded.BrightnessHigh
+import androidx.compose.material.icons.rounded.BrightnessMedium
+import androidx.compose.material.icons.rounded.Cast
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.Computer
+import androidx.compose.material.icons.rounded.CropFree
 import androidx.compose.material.icons.rounded.Dashboard
 import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.Headphones
@@ -62,14 +67,17 @@ import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.NightsStay
 import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SettingsRemote
 import androidx.compose.material.icons.rounded.Smartphone
 import androidx.compose.material.icons.rounded.SportsEsports
 import androidx.compose.material.icons.rounded.Subtitles
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Tv
@@ -97,8 +105,10 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
@@ -112,7 +122,6 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -139,17 +148,34 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.Locale
 
-enum class CcPage { Main, Wifi, Bluetooth, Adb, Widgets, Clock, Icons, Wallpapers }
+/**
+ * Main = the control center itself.
+ * GlassSettings = the small page opened by the "Glass settings" round button (Personalization + Check for update).
+ * Personalization = the wide settings page (categories on the left, choices on the right).
+ * Widgets / Clock / Icons / Wallpapers are kept only so older code that opens them still works:
+ * they now open the Personalization page on the matching category.
+ */
+enum class CcPage { Main, Wifi, Bluetooth, Adb, GlassSettings, Personalization, Widgets, Clock, Icons, Wallpapers }
 
 /** Narrow, tall sheet, like the tvOS Control Center. */
 val PanelWidth = 300.dp
 val PanelHeight = 516.dp
 
+/** The panel gets wider for the Personalization page. */
+val PersonalWidth = 580.dp
+val PersonalHeight = 440.dp
+
 /** Where the panel sits on the screen (HomeScreen places it with these, the animation needs them too). */
 val PanelTop = 12.dp
 val PanelEnd = 24.dp
+
+/** "Check for update" looks at the latest release of this GitHub repository. Change it if you move the project. */
+private const val UPDATE_REPO = "lwrnccena-ctrl/GlassLauncher"
 
 // ---- Open / close animation: the panel and its tiles grow out of the top-right corner ----
 
@@ -255,29 +281,29 @@ private val Orange = Color(0xFFFF9F0A)
 private val Purple = Color(0xFFBF5AF2)
 
 /**
- * Selection numbers on the main page (the numbers 0-5 match the order of the list in tiles()):
+ * Selection numbers on the main page:
  *
- *   Wi-Fi       | Bluetooth
- *   Icon pack   | brightness + volume (two vertical sliders, two rows tall)
- *   Hidden apps | (same sliders)
- *   Wallpaper   | Animations
- *   Widgets tile | Clock tile (two half-width icon-only tiles)
- *   round shortcuts
+ *   Wi-Fi        | Bluetooth
+ *   Miracast     | brightness + volume (two vertical sliders, two rows tall)
+ *   Hidden apps  | (same sliders)
+ *   Screen dim   | Screenshot        (placeholders)
+ *   Sleep        | Shutdown          (placeholders)
+ *   round buttons (the center one is "Glass settings")
  *
  * ADB_BTN is the round ADB button at the top right, next to the clock.
  */
 private const val WIFI = 0
-private const val ANIMATIONS = 1
-private const val ICONS = 2
+private const val BLUETOOTH = 1
+private const val MIRACAST = 2
 private const val HIDDEN = 3
-private const val BLUETOOTH = 4
-private const val WALLPAPER = 5
-private const val BRIGHTNESS = 6
-private const val VOLUME = 7
-private const val WIDGETS = 8
-private const val FIRST_SHORTCUT = 9
+private const val BRIGHTNESS = 4
+private const val VOLUME = 5
+private const val DIM = 6
+private const val SHOT = 7
+private const val SLEEP = 8
+private const val SHUTDOWN = 9
+private const val FIRST_BOTTOM = 10
 private const val ADB_BTN = 100
-private const val CLOCK_BTN = 101
 
 private val SunYellow = Color(0xFFFFD60A)
 
@@ -309,7 +335,7 @@ private sealed interface Line {
 
 private class Tile(val icon: ImageVector, val title: String, val status: String, val active: Boolean, val accent: Color)
 
-/** One tile of the Widgets page (second control center). */
+/** One tile of the Widgets choices in Personalization. */
 private class WidgetItem(val icon: ImageVector, val title: String, val on: Boolean)
 
 private val Section.icon: ImageVector
@@ -324,8 +350,9 @@ private val Section.icon: ImageVector
     }
 
 /**
- * tvOS-style Control Center: a grid of modules, Widgets and Clock tiles that open extra pages, round
- * shortcuts, and Wi-Fi / Bluetooth / ADB / Widgets / Clock / Icon pack pages that slide inside the panel.
+ * tvOS-style Control Center: a grid of modules, round shortcuts (with "Glass settings" in the middle),
+ * and Wi-Fi / Bluetooth / ADB pages that slide inside the panel. "Glass settings" opens a small page with
+ * Personalization and Check for update, and Personalization opens its own wide page.
  * All remote navigation for it lives here.
  */
 class ControlCenter(
@@ -351,10 +378,6 @@ class ControlCenter(
 
     var page by mutableStateOf(CcPage.Main)
     var index by mutableIntStateOf(0)
-    /** Selected tile on the Widgets page: 0 verse, 1 music, 2 lyrics, 3 weather. */
-    var widgetIndex by mutableIntStateOf(0)
-    /** Selected style on the Clock page (see ClockStyle). */
-    var clockIndex by mutableIntStateOf(0)
     /** Selected item on a detail page, identified by its key. */
     var rowKey by mutableStateOf("toggle")
     /** Network whose password is being typed (the on-screen keyboard is open). */
@@ -364,14 +387,30 @@ class ControlCenter(
     /** Bumped to re-read memory, storage and animations. */
     var tick by mutableIntStateOf(0)
 
+    // ---- Glass settings page state ----
+    /** 0 = Personalization, 1 = Check for update. */
+    private var glassIndex by mutableIntStateOf(0)
+    private var updateStatus by mutableStateOf("")
+    private var updateUrl by mutableStateOf<String?>(null)
+    private var updateBusy = false
+
+    // ---- Personalization page state ----
+    /** Category on the left: 0 Wallpaper, 1 Icon pack, 2 Clock, 3 Widgets, 4 Animations. */
+    private var personalCat by mutableIntStateOf(0)
+    /** 0 = the left list has the focus, 1 = the choices on the right have it. */
+    private var personalZone by mutableIntStateOf(0)
+    /** Selected choice on the right. */
+    private var paneIndex by mutableIntStateOf(0)
+
     // ---- Icon pack state ----
     /** The icon pack in use (package name), or null for the default. MainActivity loads it before this class is created. */
     private var iconPack by mutableStateOf(CustomIcons.selectedPack())
-    /** Installed icon packs (package -> label), read when the Icon pack page opens. */
+    /** Installed icon packs (package -> label), read when the Personalization page opens. */
     private var packs: Map<String, String> = emptyMap()
+    private var packKeys: List<String> = emptyList()
 
-    // ---- Wallpaper page state ----
-    /** Names of all wallpapers, read when the Wallpaper page opens. The last entry is "Auto". */
+    // ---- Wallpaper state ----
+    /** Names of all wallpapers, read when the Personalization page opens. The last entry is "Auto". */
     private var wallpaperNames: List<String> = emptyList()
 
     // ---- ADB state ----
@@ -391,6 +430,12 @@ class ControlCenter(
     private val shortcuts: List<Section> by lazy {
         listOf(Section.Display, Section.Devices, Section.Apps, Section.Accessibility, Section.About)
             .filter(settings::available).take(4) + Section.All
+    }
+
+    /** The round buttons at the bottom. A null entry is the "Glass settings" button, which sits in the middle. */
+    private val bottom: List<Section?> by lazy {
+        val base = shortcuts
+        base.take(2) + listOf<Section?>(null) + base.drop(2).takeLast(2)
     }
 
     private fun str(@StringRes id: Int, vararg args: Any): String = context.getString(id, *args)
@@ -420,19 +465,18 @@ class ControlCenter(
     }
 
     fun open(target: CcPage) {
-        page = target
-        index = when (target) {
-            CcPage.Wifi -> 0
-            CcPage.Bluetooth -> BLUETOOTH
-            CcPage.Main -> 0
-            CcPage.Adb -> 0
-            CcPage.Widgets -> 0
-            CcPage.Clock -> 0
-            CcPage.Icons -> 0
-            CcPage.Wallpapers -> 0
+        when (target) {
+            CcPage.Personalization -> openPersonalization(0)
+            CcPage.Wallpapers -> openPersonalization(0)
+            CcPage.Icons -> openPersonalization(1)
+            CcPage.Clock -> openPersonalization(2)
+            CcPage.Widgets -> openPersonalization(3)
+            CcPage.GlassSettings -> { page = CcPage.GlassSettings; glassIndex = 0 }
+            else -> {
+                page = target
+                index = if (target == CcPage.Bluetooth) BLUETOOTH else 0
+            }
         }
-        widgetIndex = 0
-        clockIndex = repo.clockStyle
         rowKey = "toggle"
         wifi.start()
         bt.start()
@@ -449,13 +493,166 @@ class ControlCenter(
         onClose()
     }
 
-    // ---- Icon pack ----
+    // ---- Glass settings page ----
 
-    private fun openIcons() {
-        packs = CustomIcons.listPacks(context)
-        rowKey = "pack:${iconPack ?: "default"}"
-        page = CcPage.Icons
+    private fun openGlassSettings() {
+        glassIndex = 0
+        page = CcPage.GlassSettings
     }
+
+    private fun selectGlass() {
+        if (glassIndex == 0) openPersonalization(0) else checkUpdate()
+    }
+
+    private fun moveGlass(dx: Int, dy: Int) {
+        if (dx < 0) { page = CcPage.Main; return }
+        if (dy != 0) glassIndex = (glassIndex + dy).coerceIn(0, 1)
+    }
+
+    // ---- Check for update ----
+
+    private fun versionParts(v: String): List<Int> =
+        Regex("\\d+").findAll(v).mapNotNull { it.value.toIntOrNull() }.toList()
+
+    private fun isNewer(remote: String, local: String): Boolean {
+        val a = versionParts(remote)
+        val b = versionParts(local)
+        for (i in 0 until maxOf(a.size, b.size)) {
+            val x = a.getOrElse(i) { 0 }
+            val y = b.getOrElse(i) { 0 }
+            if (x != y) return x > y
+        }
+        return false
+    }
+
+    private fun fetchLatestRelease(): Result<Pair<String, String>> = try {
+        val conn = URL("https://api.github.com/repos/$UPDATE_REPO/releases/latest").openConnection() as HttpURLConnection
+        conn.connectTimeout = 8000
+        conn.readTimeout = 8000
+        conn.setRequestProperty("Accept", "application/vnd.github+json")
+        try {
+            when (conn.responseCode) {
+                200 -> {
+                    val body = conn.inputStream.bufferedReader().use { it.readText() }
+                    val json = JSONObject(body)
+                    Result.success(
+                        json.getString("tag_name") to json.optString("html_url", "https://github.com/$UPDATE_REPO/releases"),
+                    )
+                }
+                404 -> Result.failure<Pair<String, String>>(Exception("No release has been published on GitHub yet."))
+                else -> Result.failure<Pair<String, String>>(Exception("GitHub answered ${conn.responseCode}. Try again later."))
+            }
+        } finally {
+            conn.disconnect()
+        }
+    } catch (e: Exception) {
+        Result.failure<Pair<String, String>>(Exception("Couldn't reach GitHub. Check the Wi-Fi."))
+    }
+
+    private fun checkUpdate() {
+        if (updateBusy) return
+        val link = updateUrl
+        if (link != null) {
+            // A newer version was found: OK opens its download page.
+            runCatching { onOpen(Intent(Intent.ACTION_VIEW, Uri.parse(link)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            return
+        }
+        updateBusy = true
+        updateStatus = "Checking GitHub\u2026"
+        scope.launch {
+            val local = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "0"
+            val result = withContext(Dispatchers.IO) { fetchLatestRelease() }
+            result.onSuccess { (tag, url) ->
+                if (isNewer(tag, local)) {
+                    updateUrl = url
+                    updateStatus = "New version $tag available (you have $local). Press OK to open the download page."
+                } else {
+                    updateStatus = "You're up to date ($local)."
+                }
+            }.onFailure {
+                updateStatus = it.message ?: "Couldn't check for updates."
+            }
+            updateBusy = false
+        }
+    }
+
+    // ---- Personalization page ----
+
+    private fun openPersonalization(category: Int) {
+        packs = CustomIcons.listPacks(context)
+        packKeys = packs.keys.toList()
+        val count = Wallpapers.count(context)
+        wallpaperNames = List(count + 1) { i ->
+            if (i == count) "Auto (sky & weather)"
+            else runCatching { Wallpapers.name(context, i) }.getOrDefault("Wallpaper ${i + 1}")
+        }
+        personalCat = category
+        personalZone = 0
+        paneIndex = 0
+        page = CcPage.Personalization
+    }
+
+    private fun paneCount(): Int = when (personalCat) {
+        0 -> wallpaperNames.size
+        1 -> 1 + packKeys.size
+        2 -> ClockStyle.COUNT
+        3 -> 4
+        else -> 1
+    }
+
+    private fun paneCols(): Int = when (personalCat) {
+        0, 2, 3 -> 2
+        else -> 1
+    }
+
+    /** Moves the focus to the choices on the right, on the one that is in use. */
+    private fun enterPane() {
+        paneIndex = when (personalCat) {
+            0 -> repo.wallpaperIndex % wallpaperNames.size.coerceAtLeast(1)
+            1 -> if (iconPack == null) 0 else (packKeys.indexOf(iconPack) + 1).coerceAtLeast(0)
+            2 -> repo.clockStyle
+            else -> 0
+        }
+        personalZone = 1
+    }
+
+    private fun movePersonal(dx: Int, dy: Int) {
+        if (personalZone == 0) {
+            when {
+                dy != 0 -> personalCat = (personalCat + dy).coerceIn(0, 4)
+                dx > 0 -> enterPane()
+                dx < 0 -> page = CcPage.GlassSettings
+            }
+            return
+        }
+        val n = paneCount()
+        val cols = paneCols()
+        val col = paneIndex % cols
+        when {
+            dx < 0 -> if (col == 0) personalZone = 0 else paneIndex -= 1
+            dx > 0 -> if (col < cols - 1 && paneIndex + 1 < n) paneIndex += 1
+            dy > 0 -> if (paneIndex + cols < n) paneIndex += cols
+            dy < 0 -> if (paneIndex - cols >= 0) paneIndex -= cols
+        }
+    }
+
+    private fun selectPersonal() {
+        if (personalZone == 0) { enterPane(); return }
+        when (personalCat) {
+            0 -> setWallpaper(paneIndex)
+            1 -> applyIconPack(if (paneIndex == 0) null else packKeys.getOrNull(paneIndex - 1))
+            2 -> repo.changeClockStyle(paneIndex)
+            3 -> when (paneIndex) {
+                0 -> Features.toggleVerse()
+                1 -> Features.toggleMusic()
+                2 -> Features.toggleLyrics()
+                3 -> Features.toggleWeather()
+            }
+            else -> { sys.cycleAnimations(); tick++ }
+        }
+    }
+
+    // ---- Icon pack ----
 
     /** Saves the choice, loads the pack, and redraws every tile with it. */
     private fun applyIconPack(pkg: String?) {
@@ -468,17 +665,15 @@ class ControlCenter(
         }
     }
 
-    // ---- Wallpaper list ----
-
-    private fun openWallpapers() {
-        val count = Wallpapers.count(context)
-        wallpaperNames = List(count + 1) { i ->
-            if (i == count) "Auto (sky & weather)"
-            else runCatching { Wallpapers.name(context, i) }.getOrDefault("Wallpaper ${i + 1}")
-        }
-        rowKey = "wall:${repo.wallpaperIndex % (count + 1)}"
-        page = CcPage.Wallpapers
+    private fun iconPackLabel(pkg: String?): String {
+        if (pkg == null) return "Default"
+        return packs[pkg] ?: runCatching {
+            val pm = context.packageManager
+            pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+        }.getOrDefault(pkg)
     }
+
+    // ---- Wallpaper ----
 
     /** Picks one wallpaper. MainActivity only knows "next", so step back one and press "next". */
     private fun setWallpaper(i: Int) {
@@ -488,12 +683,19 @@ class ControlCenter(
         onNextWallpaper()
     }
 
-    private fun iconPackLabel(pkg: String?): String {
-        if (pkg == null) return "Default"
-        return packs[pkg] ?: runCatching {
-            val pm = context.packageManager
-            pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
-        }.getOrDefault(pkg)
+    private fun wallpaperStatus(): String {
+        val n = wallpaperNames.size.coerceAtLeast(1)
+        return wallpaperNames.getOrNull(repo.wallpaperIndex % n)?.substringBefore(" (") ?: "Auto"
+    }
+
+    private fun animStatus(): String {
+        @Suppress("UNUSED_EXPRESSION") tick
+        val anim = sys.animationScale()
+        return if (!sys.canWriteSettings()) str(R.string.cc_anim_adb) else when (anim) {
+            1f -> str(R.string.cc_anim_normal)
+            0f -> str(R.string.cc_anim_off)
+            else -> str(R.string.cc_anim_fast, anim)
+        }
     }
 
     // ---- ADB ----
@@ -575,23 +777,12 @@ class ControlCenter(
 
     // ---- Main page ----
 
-    private fun tiles(wallpaperName: String): List<Tile> {
+    /** Wi-Fi (0), Bluetooth (1) and Hidden apps (2). */
+    private fun tiles(): List<Tile> {
         @Suppress("UNUSED_EXPRESSION") tick
-        val anim = sys.animationScale()
         return listOf(
             Tile(if (wifi.enabled) Icons.Rounded.Wifi else Icons.Rounded.WifiOff, "Wi-Fi",
                 if (!wifi.enabled) str(R.string.cc_off) else wifi.current ?: str(R.string.cc_not_connected), wifi.enabled && wifi.current != null, WifiBlue),
-            Tile(Icons.Rounded.Animation, str(R.string.cc_animations),
-                if (!sys.canWriteSettings()) str(R.string.cc_anim_adb) else when (anim) {
-                    1f -> str(R.string.cc_anim_normal)
-                    0f -> str(R.string.cc_anim_off)
-                    else -> str(R.string.cc_anim_fast, anim)
-                },
-                anim < 1f, Orange),
-            Tile(Icons.Rounded.Palette, "Icon pack", iconPackLabel(iconPack), iconPack != null, Purple),
-            Tile(Icons.Rounded.Visibility, str(R.string.cc_hidden_apps),
-                if (repo.hiddenCount == 0) str(R.string.cc_hidden_none) else str(R.string.cc_hidden_count, repo.hiddenCount),
-                repo.hiddenCount > 0, Green),
             Tile(if (bt.enabled) Icons.Rounded.Bluetooth else Icons.Rounded.BluetoothDisabled, "Bluetooth",
                 when {
                     !bt.available -> str(R.string.cc_unavailable)
@@ -600,24 +791,33 @@ class ControlCenter(
                         if (it == 0) str(R.string.cc_no_devices) else context.resources.getQuantityString(R.plurals.cc_connected_count, it, it)
                     }
                 }, bt.enabled, WifiBlue),
-            Tile(Icons.Rounded.Wallpaper, str(R.string.cc_wallpaper), wallpaperName, false, Purple),
+            Tile(Icons.Rounded.Visibility, str(R.string.cc_hidden_apps),
+                if (repo.hiddenCount == 0) str(R.string.cc_hidden_none) else str(R.string.cc_hidden_count, repo.hiddenCount),
+                repo.hiddenCount > 0, Green),
         )
     }
+
+    /** A tile that does nothing yet. Give it a job in selectMain(). */
+    private fun placeholder(icon: ImageVector, title: String, accent: Color, status: String = "Placeholder") =
+        Tile(icon, title, status, false, accent)
 
     private fun selectMain() {
         when (index) {
             WIFI -> { page = CcPage.Wifi; rowKey = "toggle"; askPermissions(); wifi.scan() }
-            ANIMATIONS -> { sys.cycleAnimations(); tick++ }
-            ICONS -> openIcons()
-            HIDDEN -> repo.unhideAll()
             BLUETOOTH -> { page = CcPage.Bluetooth; rowKey = "toggle"; askPermissions() }
-            WALLPAPER -> openWallpapers()
+            MIRACAST -> Unit // placeholder
+            HIDDEN -> repo.unhideAll()
             BRIGHTNESS -> Unit // Up / Down change it
             VOLUME -> levels.toggleMute()
-            WIDGETS -> { page = CcPage.Widgets; widgetIndex = 0 }
-            CLOCK_BTN -> { page = CcPage.Clock; clockIndex = repo.clockStyle }
+            DIM -> Unit // placeholder
+            SHOT -> Unit // placeholder
+            SLEEP -> Unit // placeholder
+            SHUTDOWN -> Unit // placeholder
             ADB_BTN -> openAdb()
-            else -> open(shortcuts[index - FIRST_SHORTCUT])
+            else -> {
+                val s = bottom.getOrNull(index - FIRST_BOTTOM)
+                if (s == null) openGlassSettings() else open(s)
+            }
         }
     }
 
@@ -628,13 +828,14 @@ class ControlCenter(
             if (dy > 0) index = BLUETOOTH else if (dx < 0) index = WIFI
             return
         }
-        // The two sliders are vertical now: Up / Down change the value, Left / Right move the selection.
+        // The two sliders are vertical: Up / Down change the value, Left / Right move the selection.
         if (dy != 0 && i == BRIGHTNESS) { levels.adjustBrightness(-dy); return }
         if (dy != 0 && i == VOLUME) { levels.adjustVolume(-dy); return }
+        val mid = bottom.size / 2
         index = when (i) {
             WIFI -> when {
                 dx > 0 -> BLUETOOTH
-                dy > 0 -> ICONS
+                dy > 0 -> MIRACAST
                 dy < 0 -> ADB_BTN
                 else -> i
             }
@@ -644,7 +845,7 @@ class ControlCenter(
                 dy < 0 -> ADB_BTN
                 else -> i
             }
-            ICONS -> when {
+            MIRACAST -> when {
                 dx > 0 -> BRIGHTNESS
                 dy < 0 -> WIFI
                 dy > 0 -> HIDDEN
@@ -652,50 +853,53 @@ class ControlCenter(
             }
             HIDDEN -> when {
                 dx > 0 -> BRIGHTNESS
-                dy < 0 -> ICONS
-                dy > 0 -> WALLPAPER
+                dy < 0 -> MIRACAST
+                dy > 0 -> DIM
                 else -> i
             }
             BRIGHTNESS -> when {
-                dx < 0 -> ICONS
+                dx < 0 -> MIRACAST
                 dx > 0 -> VOLUME
                 else -> i
             }
             VOLUME -> if (dx < 0) BRIGHTNESS else i
-            WALLPAPER -> when {
-                dx > 0 -> ANIMATIONS
+            DIM -> when {
+                dx > 0 -> SHOT
                 dy < 0 -> HIDDEN
-                dy > 0 -> WIDGETS
+                dy > 0 -> SLEEP
                 else -> i
             }
-            ANIMATIONS -> when {
-                dx < 0 -> WALLPAPER
+            SHOT -> when {
+                dx < 0 -> DIM
                 dy < 0 -> VOLUME
-                dy > 0 -> CLOCK_BTN
+                dy > 0 -> SHUTDOWN
                 else -> i
             }
-            WIDGETS -> when {
-                dx > 0 -> CLOCK_BTN
-                dy < 0 -> WALLPAPER
-                dy > 0 -> FIRST_SHORTCUT + (shortcuts.size / 2).coerceAtMost(shortcuts.lastIndex)
+            SLEEP -> when {
+                dx > 0 -> SHUTDOWN
+                dy < 0 -> DIM
+                dy > 0 -> FIRST_BOTTOM + mid
                 else -> i
             }
-            CLOCK_BTN -> when {
-                dx < 0 -> WIDGETS
-                dy < 0 -> ANIMATIONS
-                dy > 0 -> FIRST_SHORTCUT + shortcuts.lastIndex
+            SHUTDOWN -> when {
+                dx < 0 -> SLEEP
+                dy < 0 -> SHOT
+                dy > 0 -> FIRST_BOTTOM + bottom.lastIndex
                 else -> i
             }
-            else -> when {
-                dx < 0 && i > FIRST_SHORTCUT -> i - 1
-                dx > 0 && i < FIRST_SHORTCUT + shortcuts.lastIndex -> i + 1
-                dy < 0 -> if (i - FIRST_SHORTCUT > shortcuts.lastIndex / 2) CLOCK_BTN else WIDGETS
-                else -> i
+            else -> {
+                val k = i - FIRST_BOTTOM
+                when {
+                    dx < 0 && k > 0 -> i - 1
+                    dx > 0 && k < bottom.lastIndex -> i + 1
+                    dy < 0 -> if (k > mid) SHUTDOWN else SLEEP
+                    else -> i
+                }
             }
         }
     }
 
-    // ---- Widgets page (second control center) ----
+    // ---- Widgets choices (Personalization) ----
 
     private fun widgetItems() = listOf(
         WidgetItem(Icons.Rounded.MenuBook, "Verse", Features.verse),
@@ -703,41 +907,6 @@ class ControlCenter(
         WidgetItem(Icons.Rounded.Subtitles, "Lyrics", Features.lyrics),
         WidgetItem(Icons.Rounded.WbSunny, "Weather", Features.weather),
     )
-
-    private fun selectWidget() {
-        when (widgetIndex) {
-            0 -> Features.toggleVerse()
-            1 -> Features.toggleMusic()
-            2 -> Features.toggleLyrics()
-            3 -> Features.toggleWeather()
-        }
-    }
-
-    /** 2x2 grid. Left from the left column goes back to the main page. */
-    private fun moveWidgets(dx: Int, dy: Int) {
-        val col = widgetIndex % 2
-        when {
-            dx < 0 -> if (col == 0) page = CcPage.Main else widgetIndex -= 1
-            dx > 0 && col == 0 -> widgetIndex += 1
-            dy > 0 && widgetIndex < 2 -> widgetIndex += 2
-            dy < 0 && widgetIndex >= 2 -> widgetIndex -= 2
-        }
-    }
-
-    // ---- Clock page (second control center: the clock styles) ----
-
-    private fun selectClock() = repo.changeClockStyle(clockIndex)
-
-    /** 2-column grid (the last row has one style). Left from the left column goes back to the main page. */
-    private fun moveClock(dx: Int, dy: Int) {
-        val col = clockIndex % 2
-        when {
-            dx < 0 -> if (col == 0) page = CcPage.Main else clockIndex -= 1
-            dx > 0 -> if (col == 0 && clockIndex + 1 < ClockStyle.COUNT) clockIndex += 1
-            dy > 0 -> if (clockIndex + 2 < ClockStyle.COUNT) clockIndex += 2
-            dy < 0 -> if (clockIndex >= 2) clockIndex -= 2
-        }
-    }
 
     private fun clockName(style: Int): String = str(
         when (style) {
@@ -749,31 +918,9 @@ class ControlCenter(
         },
     )
 
-    // ---- Detail pages ----
+    // ---- Detail pages (Wi-Fi, Bluetooth, ADB) ----
 
     private fun rows(): List<Line> = when (page) {
-        CcPage.Main -> emptyList()
-        CcPage.Widgets -> emptyList()
-        CcPage.Clock -> emptyList()
-        CcPage.Wallpapers -> buildList {
-            val current = repo.wallpaperIndex % wallpaperNames.size.coerceAtLeast(1)
-            val autoIndex = wallpaperNames.lastIndex
-            // Still wallpapers: the generated ones and your own photo. Dynamic: the sky that follows time and weather.
-            add(Line.Header("Still wallpaper"))
-            for (i in 0 until autoIndex) add(Line.Wall(i, wallpaperNames[i], i == current))
-            add(Line.Header("Dynamic"))
-            if (autoIndex >= 0) add(Line.Wall(autoIndex, wallpaperNames[autoIndex], autoIndex == current, "Follows the time of day and weather"))
-        }
-        CcPage.Icons -> buildList {
-            add(Line.Pack(null, "Default", "Each app's own banner or logo", iconPack == null))
-            packs.forEach { (pkg, label) -> add(Line.Pack(pkg, label, pkg, iconPack == pkg)) }
-            add(
-                Line.Note(
-                    if (packs.isEmpty()) "No icon packs installed. You can also put PNG files named <package>.png in /sdcard/Glass/icons/, then pick Default to refresh."
-                    else "You can also put PNG files named <package>.png in /sdcard/Glass/icons/.",
-                ),
-            )
-        }
         CcPage.Wifi -> buildList {
             add(Line.Toggle("Wi-Fi", wifi.enabled))
             if (wifi.enabled) {
@@ -815,6 +962,7 @@ class ControlCenter(
             add(Line.Cmd("location", "Location", if (location) "Granted" else "OK to grant", location))
             if (adbStatus.isNotEmpty()) add(Line.Note(adbStatus))
         }
+        else -> emptyList()
     }
 
     private fun iconFor(kind: BtKind) = when (kind) {
@@ -923,20 +1071,25 @@ class ControlCenter(
                 if (e.repeatCount == 0) {
                     when (page) {
                         CcPage.Main -> selectMain()
-                        CcPage.Widgets -> selectWidget()
-                        CcPage.Clock -> selectClock()
+                        CcPage.GlassSettings -> selectGlass()
+                        CcPage.Personalization -> selectPersonal()
                         else -> selectDetail()
                     }
                 }
             AndroidKey.KEYCODE_BACK -> if (e.repeatCount == 0) {
-                if (page == CcPage.Main) close() else { page = CcPage.Main; forgetArmed = null }
+                when (page) {
+                    CcPage.Main -> close()
+                    CcPage.Personalization ->
+                        if (personalZone == 1) personalZone = 0 else page = CcPage.GlassSettings
+                    else -> { page = CcPage.Main; forgetArmed = null }
+                }
             }
             AndroidKey.KEYCODE_MENU -> if (e.repeatCount == 0) close()
             else -> if (dx != 0 || dy != 0) {
                 when (page) {
                     CcPage.Main -> moveMain(dx, dy)
-                    CcPage.Widgets -> moveWidgets(dx, dy)
-                    CcPage.Clock -> moveClock(dx, dy)
+                    CcPage.GlassSettings -> moveGlass(dx, dy)
+                    CcPage.Personalization -> movePersonal(dx, dy)
                     else -> if (dx < 0) { page = CcPage.Main; forgetArmed = null } else if (dy != 0) moveDetail(dy)
                 }
             }
@@ -953,21 +1106,26 @@ class ControlCenter(
      *
      * When there is no blurred wallpaper behind it (the Top Shelf video is showing), the big
      * panel is not drawn at all and the tiles get a milky frosted fill instead.
+     *
+     * The panel is wider on the Personalization page (it grows to the left).
      */
     @Composable
     fun Panel(backdrop: Backdrop, wallpaperName: String, reveal: CcReveal, modifier: Modifier) {
         val density = LocalDensity.current
         val host = remember { CornerHost() }
         val clear = backdrop.frosted == null
+        val wide = page == CcPage.Personalization
+        val panelW by animateDpAsState(if (wide) PersonalWidth else PanelWidth, tween(320, easing = FastOutSlowInEasing), label = "ccW")
+        val panelH by animateDpAsState(if (wide) PersonalHeight else PanelHeight, tween(320, easing = FastOutSlowInEasing), label = "ccH")
         // Final top-left corner of the panel on the screen, so the frosted glass stays lined up while it scales.
         val finalOrigin = with(density) {
-            Offset(backdrop.screen.width - (PanelWidth + PanelEnd).toPx(), PanelTop.toPx())
+            Offset(backdrop.screen.width - (panelW + PanelEnd).toPx(), PanelTop.toPx())
         }
         CompositionLocalProvider(LocalClear provides clear) {
             Glass(
                 backdrop,
                 modifier
-                    .size(PanelWidth, PanelHeight)
+                    .size(panelW, panelH)
                     .graphicsLayer {
                         val t = reveal.progress()
                         val grow: Float
@@ -993,7 +1151,7 @@ class ControlCenter(
                 AnimatedContent(
                     page,
                     transitionSpec = {
-                        val forward = targetState != CcPage.Main
+                        val forward = targetState.ordinal > initialState.ordinal
                         (slideInHorizontally(tween(260)) { if (forward) it / 3 else -it / 3 } + fadeIn(tween(200))) togetherWith
                             (slideOutHorizontally(tween(220)) { if (forward) -it / 3 else it / 3 } + fadeOut(tween(160)))
                     },
@@ -1006,10 +1164,11 @@ class ControlCenter(
                             .onGloballyPositioned { host.coords = it },
                     ) {
                         when (p) {
-                            CcPage.Main -> MainPage(wallpaperName, host, reveal)
-                            CcPage.Widgets -> WidgetsPage()
-                            CcPage.Clock -> ClockPage()
-                            else -> DetailPage(p)
+                            CcPage.Main -> MainPage(host, reveal)
+                            CcPage.GlassSettings -> GlassSettingsPage()
+                            CcPage.Personalization -> PersonalizationPage()
+                            CcPage.Wifi, CcPage.Bluetooth, CcPage.Adb -> DetailPage(p)
+                            else -> Unit
                         }
                     }
                 }
@@ -1018,10 +1177,10 @@ class ControlCenter(
     }
 
     @Composable
-    private fun MainPage(wallpaperName: String, host: CornerHost, reveal: CcReveal) {
+    private fun MainPage(host: CornerHost, reveal: CcReveal) {
         val clear = LocalClear.current
         val (time, date) = rememberClock(rememberNow())
-        val tiles = tiles(wallpaperName)
+        val t = tiles()
         Column(Modifier.fillMaxSize()) {
             // Clock on the left, round ADB button on the right.
             Row(
@@ -1038,16 +1197,19 @@ class ControlCenter(
 
             // Row 1: Wi-Fi | Bluetooth
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ModuleTile(tiles[WIFI], index == WIFI, Modifier.weight(1f).revealFromCorner(host, reveal, 2))
-                ModuleTile(tiles[BLUETOOTH], index == BLUETOOTH, Modifier.weight(1f).revealFromCorner(host, reveal, 1))
+                ModuleTile(t[0], index == WIFI, Modifier.weight(1f).revealFromCorner(host, reveal, 2))
+                ModuleTile(t[1], index == BLUETOOTH, Modifier.weight(1f).revealFromCorner(host, reveal, 1))
             }
             Spacer(Modifier.height(8.dp))
 
-            // Rows 2-3: Icon pack / Hidden apps on the left, two vertical sliders on the right.
+            // Rows 2-3: Miracast / Hidden apps on the left, two vertical sliders on the right.
             Row(Modifier.fillMaxWidth().height(TileHeight * 2 + 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ModuleTile(tiles[ICONS], index == ICONS, Modifier.fillMaxWidth().revealFromCorner(host, reveal, 4))
-                    ModuleTile(tiles[HIDDEN], index == HIDDEN, Modifier.fillMaxWidth().revealFromCorner(host, reveal, 5))
+                    ModuleTile(
+                        placeholder(Icons.Rounded.Cast, "Miracast", WifiBlue, "Cast screen"),
+                        index == MIRACAST, Modifier.fillMaxWidth().revealFromCorner(host, reveal, 4),
+                    )
+                    ModuleTile(t[2], index == HIDDEN, Modifier.fillMaxWidth().revealFromCorner(host, reveal, 5))
                 }
                 // Up / Down change the level, OK on the volume mutes.
                 Row(
@@ -1068,23 +1230,28 @@ class ControlCenter(
             }
             Spacer(Modifier.height(8.dp))
 
-            // Row 4: Wallpaper | Animations
+            // Row 4: Screen dim | Screenshot (placeholders)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ModuleTile(tiles[WALLPAPER], index == WALLPAPER, Modifier.weight(1f).revealFromCorner(host, reveal, 7))
-                ModuleTile(tiles[ANIMATIONS], index == ANIMATIONS, Modifier.weight(1f).revealFromCorner(host, reveal, 6))
+                ModuleTile(
+                    placeholder(Icons.Rounded.BrightnessMedium, "Screen dim", Orange),
+                    index == DIM, Modifier.weight(1f).revealFromCorner(host, reveal, 7),
+                )
+                ModuleTile(
+                    placeholder(Icons.Rounded.CropFree, "Screenshot", WifiBlue),
+                    index == SHOT, Modifier.weight(1f).revealFromCorner(host, reveal, 6),
+                )
             }
             Spacer(Modifier.height(8.dp))
 
-            // Row 5: Widgets | Clock. Same size and look as the tiles above (icon, title, status).
-            val widgetsOn = listOf(Features.verse, Features.music, Features.lyrics, Features.weather).count { it }
+            // Row 5: Sleep | Shutdown (placeholders)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ModuleTile(
-                    Tile(Icons.Rounded.Dashboard, "Widgets", "$widgetsOn/4 on", widgetsOn > 0, Green),
-                    index == WIDGETS, Modifier.weight(1f).revealFromCorner(host, reveal, 8),
+                    placeholder(Icons.Rounded.NightsStay, "Sleep", Purple),
+                    index == SLEEP, Modifier.weight(1f).revealFromCorner(host, reveal, 8),
                 )
                 ModuleTile(
-                    Tile(Icons.Rounded.AccessTime, str(R.string.cc_clock), clockName(repo.clockStyle), true, WifiBlue),
-                    index == CLOCK_BTN, Modifier.weight(1f).revealFromCorner(host, reveal, 9),
+                    placeholder(Icons.Rounded.PowerSettingsNew, "Shutdown", Color(0xFFFF453A)),
+                    index == SHUTDOWN, Modifier.weight(1f).revealFromCorner(host, reveal, 9),
                 )
             }
 
@@ -1093,15 +1260,19 @@ class ControlCenter(
                 Modifier.fillMaxWidth().revealFromCorner(host, reveal, 10),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                shortcuts.forEachIndexed { k, s -> RoundButton(s.icon, index == FIRST_SHORTCUT + k) }
+                bottom.forEachIndexed { k, s ->
+                    RoundButton(if (s == null) Icons.Rounded.Tune else s.icon, index == FIRST_BOTTOM + k)
+                }
             }
             Spacer(Modifier.height(6.dp))
+            val k = index - FIRST_BOTTOM
             BasicText(
                 when {
                     index == ADB_BTN -> "ADB"
-                    index == WIDGETS -> "Widgets"
-                    index == CLOCK_BTN -> str(R.string.cc_clock)
-                    index >= FIRST_SHORTCUT -> str(shortcuts[index - FIRST_SHORTCUT].title)
+                    k in bottom.indices -> {
+                        val s = bottom[k]
+                        if (s == null) "Glass settings" else str(s.title)
+                    }
                     else -> " "
                 },
                 Modifier.fillMaxWidth(),
@@ -1144,25 +1315,6 @@ class ControlCenter(
                 BasicText(t.title, style = txt(fg, 13.sp, FontWeight.SemiBold), maxLines = 1)
                 BasicText(t.status, style = txt(fg.copy(alpha = 0.6f), 11.sp, FontWeight.Medium), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-        }
-    }
-
-    /** Icon-only tile. It fills the width it is given (the full row, or half of it next to another tile). */
-    @Composable
-    private fun WideIconTile(icon: ImageVector, focused: Boolean, modifier: Modifier = Modifier) {
-        val clear = LocalClear.current
-        val f = focusAmount(focused)
-        val shape = RoundedCornerShape(24.dp)
-        Box(
-            modifier
-                .fillMaxWidth()
-                .height(48.dp)
-                .graphicsLayer { scaleX = 1f + 0.04f * f; scaleY = 1f + 0.04f * f }
-                .background(lerp(restFill(clear, 0.10f), White.copy(alpha = 0.95f), f), shape)
-                .glassEdge(clear, f, shape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Image(rememberVectorPainter(icon), null, Modifier.size(24.dp), colorFilter = ColorFilter.tint(lerp(White, Ink, f)))
         }
     }
 
@@ -1223,26 +1375,288 @@ class ControlCenter(
         }
     }
 
-    // ---- Widgets page (second control center) ----
+    // ---- Glass settings page ----
 
     @Composable
-    private fun WidgetsPage() {
+    private fun GlassSettingsPage() {
         val clear = LocalClear.current
-        val items = widgetItems()
         Column(Modifier.fillMaxSize()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Image(rememberVectorPainter(Icons.Rounded.ChevronLeft), null, Modifier.size(26.dp), colorFilter = ColorFilter.tint(White.copy(alpha = 0.7f)))
-                BasicText("Widgets", style = txt(White, 24.sp, FontWeight.Bold).shade(clear))
+                BasicText("Glass settings", style = txt(White, 24.sp, FontWeight.Bold).shade(clear))
             }
+            Spacer(Modifier.height(14.dp))
+            BigRow(
+                Purple, Icons.Rounded.Palette, "Personalization",
+                "Wallpaper, icons, clock, widgets, animations", glassIndex == 0,
+            )
+            Spacer(Modifier.height(10.dp))
+            BigRow(
+                WifiBlue, Icons.Rounded.SystemUpdate, "Check for update",
+                updateStatus.ifEmpty { "Look on GitHub for a newer version" }, glassIndex == 1,
+            )
+        }
+    }
+
+    /** A big rounded row: colored icon circle, title and a short description. */
+    @Composable
+    private fun BigRow(accent: Color, icon: ImageVector, title: String, subtitle: String, focused: Boolean) {
+        val clear = LocalClear.current
+        val f = focusAmount(focused)
+        val fg = lerp(White, Ink, f)
+        val shape = RoundedCornerShape(26.dp)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .graphicsLayer { scaleX = 1f + 0.03f * f; scaleY = 1f + 0.03f * f }
+                .background(lerp(restFill(clear, 0.10f), White.copy(alpha = 0.95f), f), shape)
+                .glassEdge(clear, f, shape)
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(42.dp).clip(CircleShape).background(accent), contentAlignment = Alignment.Center) {
+                Icon(icon, White, 22)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                BasicText(title, style = txt(fg, 16.sp, FontWeight.SemiBold), maxLines = 1)
+                BasicText(subtitle, style = txt(fg.copy(alpha = 0.6f), 12.sp, FontWeight.Medium), maxLines = 4)
+            }
+        }
+    }
+
+    // ---- Personalization page ----
+
+    @Composable
+    private fun PersonalizationPage() {
+        val clear = LocalClear.current
+        val widgetsOn = listOf(Features.verse, Features.music, Features.lyrics, Features.weather).count { it }
+        val cats = listOf(
+            Triple("Wallpaper", wallpaperStatus(), Purple),
+            Triple("Icon pack", iconPackLabel(iconPack), Orange),
+            Triple(str(R.string.cc_clock), clockName(repo.clockStyle), WifiBlue),
+            Triple("Widgets", "$widgetsOn/4 on", Green),
+            Triple(str(R.string.cc_animations), animStatus(), Orange),
+        )
+        Column(Modifier.fillMaxSize()) {
+            BasicText("Personalization", style = txt(White, 26.sp, FontWeight.Bold).shade(clear))
+            BasicText(
+                "\u2191\u2193 move \u00B7 \u2192 or OK opens \u00B7 \u2190 back",
+                style = txt(White.copy(alpha = 0.6f), 12.sp, FontWeight.Medium).shade(clear),
+            )
             Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(Modifier.weight(0.85f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    cats.forEachIndexed { i, c ->
+                        CategoryRow(c.third, c.first, c.second, personalZone == 0 && personalCat == i, personalCat == i)
+                    }
+                }
+                Box(Modifier.weight(1.35f).fillMaxHeight()) {
+                    when (personalCat) {
+                        0 -> WallpaperPane()
+                        1 -> IconPackPane()
+                        2 -> ClockPane()
+                        3 -> WidgetsPane()
+                        else -> AnimationsPane()
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun CategoryRow(color: Color, title: String, status: String, focused: Boolean, active: Boolean) {
+        val clear = LocalClear.current
+        val f = focusAmount(focused)
+        val fg = lerp(White, Ink, f)
+        val shape = RoundedCornerShape(18.dp)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .height(52.dp)
+                .graphicsLayer { scaleX = 1f + 0.03f * f; scaleY = 1f + 0.03f * f }
+                .background(lerp(restFill(clear, if (active) 0.20f else 0.08f), White.copy(alpha = 0.95f), f), shape)
+                .glassEdge(clear, f, shape)
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(24.dp).clip(CircleShape).background(color))
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                BasicText(title, style = txt(fg, 14.sp, FontWeight.SemiBold), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                BasicText(status, style = txt(fg.copy(alpha = 0.6f), 11.sp, FontWeight.Medium), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+
+    // -- Wallpaper choices --
+
+    @Composable
+    private fun WallpaperPane() {
+        val n = wallpaperNames.size
+        val current = repo.wallpaperIndex % n.coerceAtLeast(1)
+        val rows = (n + 1) / 2
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (r in 0 until rows) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (c in 0 until 2) {
+                        val i = r * 2 + c
+                        if (i < n) {
+                            WallpaperCard(
+                                i, n - 1, wallpaperNames[i].substringBefore(" ("),
+                                i == current, personalZone == 1 && paneIndex == i, Modifier.weight(1f),
+                            )
+                        } else {
+                            Spacer(Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun WallpaperCard(i: Int, autoIdx: Int, label: String, selected: Boolean, focused: Boolean, modifier: Modifier) {
+        val clear = LocalClear.current
+        val f = focusAmount(focused)
+        val fg = lerp(White, Ink, f)
+        val shape = RoundedCornerShape(22.dp)
+        Column(
+            modifier
+                .height(98.dp)
+                .graphicsLayer { scaleX = 1f + 0.04f * f; scaleY = 1f + 0.04f * f }
+                .background(lerp(restFill(clear, 0.10f), White.copy(alpha = 0.95f), f), shape)
+                .glassEdge(clear, f, shape)
+                .padding(8.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+            WallpaperPreview(i, autoIdx, Modifier.fillMaxWidth().height(56.dp).clip(RoundedCornerShape(14.dp)))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                BasicText(label, Modifier.weight(1f).padding(start = 4.dp), style = txt(fg, 13.sp, FontWeight.SemiBold), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (selected) Icon(Icons.Rounded.Check, if (f > 0.5f) Ink else Green, 16)
+            }
+        }
+    }
+
+    /** Small drawn preview of a wallpaper (the real ones are only generated when they are picked). */
+    @Composable
+    private fun WallpaperPreview(i: Int, autoIdx: Int, modifier: Modifier) {
+        when {
+            i == autoIdx -> Canvas(modifier) {
+                drawRect(Brush.verticalGradient(listOf(Color(0xFFEFB56F), Color(0xFFA9BED4), Color(0xFF86C0EA))))
+                drawCircle(Color(0xFFFFF1A8), size.height * 0.17f, Offset(size.width * 0.72f, size.height * 0.3f))
+            }
+            i >= 4 -> Canvas(modifier) {
+                drawRect(Color(0xFF7FB2E0))
+                val peak = Path().apply {
+                    moveTo(size.width * 0.5f, size.height * 0.08f)
+                    lineTo(size.width * 0.7f, size.height * 0.62f)
+                    lineTo(size.width * 0.3f, size.height * 0.62f)
+                    close()
+                }
+                drawPath(peak, Color(0xFFE1E9F0))
+                drawRect(Color(0xFF527B57), Offset(0f, size.height * 0.62f), Size(size.width, size.height * 0.38f))
+            }
+            else -> {
+                val colors = when (i) {
+                    0 -> listOf(Color(0xFF3355FF), Color(0xFF8A3CFF), Color(0xFFFF6BC8))
+                    1 -> listOf(Color(0xFF062B3A), Color(0xFF1AAE8C), Color(0xFF6C5CC8))
+                    2 -> listOf(Color(0xFF3B1F5A), Color(0xFFD03F78), Color(0xFFFF9A5C))
+                    else -> listOf(Color(0xFF2B2E35), Color(0xFF4A4F5A))
+                }
+                Box(modifier.background(if (i == 2) Brush.verticalGradient(colors) else Brush.linearGradient(colors)))
+            }
+        }
+    }
+
+    // -- Icon pack choices --
+
+    @Composable
+    private fun IconPackPane() {
+        val list = buildList {
+            add(Line.Pack(null, "Default", "Each app's own banner or logo", iconPack == null))
+            packKeys.forEach { pkg -> add(Line.Pack(pkg, packs[pkg] ?: pkg, pkg, iconPack == pkg)) }
+        }
+        val clear = LocalClear.current
+        val window = 5
+        val start = (paneIndex - 2).coerceIn(0, (list.size - window).coerceAtLeast(0))
+        Column {
+            list.drop(start).take(window).forEachIndexed { k, r -> DetailRow(r, personalZone == 1 && start + k == paneIndex) }
+            if (packKeys.isEmpty()) {
+                BasicText(
+                    "No icon packs installed. PNG files named <package>.png in /sdcard/Glass/icons/ also work.",
+                    Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    style = txt(White.copy(alpha = 0.6f), 11.sp, FontWeight.Medium).shade(clear),
+                    maxLines = 4,
+                )
+            }
+        }
+    }
+
+    // -- Clock choices --
+
+    @Composable
+    private fun ClockPane() {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (r in 0 until 3) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (c in 0 until 2) {
+                        val i = r * 2 + c
+                        if (i < ClockStyle.COUNT) {
+                            ClockTile(i, personalZone == 1 && paneIndex == i, repo.clockStyle == i, Modifier.weight(1f))
+                        } else {
+                            Spacer(Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** One clock style: a small preview and its name; a green check marks the style that is in use. */
+    @Composable
+    private fun ClockTile(style: Int, focused: Boolean, selected: Boolean, modifier: Modifier) {
+        val clear = LocalClear.current
+        val f = focusAmount(focused)
+        val fg = lerp(White, Ink, f)
+        val shape = RoundedCornerShape(22.dp)
+        Column(
+            modifier
+                .height(100.dp)
+                .graphicsLayer { scaleX = 1f + 0.04f * f; scaleY = 1f + 0.04f * f }
+                .background(lerp(restFill(clear, 0.10f), White.copy(alpha = 0.95f), f), shape)
+                .glassEdge(clear, f, shape)
+                .padding(10.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                Box(Modifier.weight(1f).height(50.dp), contentAlignment = Alignment.CenterStart) {
+                    ClockMini(style, fg)
+                }
+                if (selected) {
+                    Box(
+                        Modifier.size(20.dp).clip(CircleShape).background(Green),
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(Icons.Rounded.Check, White, 13) }
+                }
+            }
+            BasicText(clockName(style), style = txt(fg, 14.sp, FontWeight.SemiBold), maxLines = 1)
+        }
+    }
+
+    // -- Widgets choices --
+
+    @Composable
+    private fun WidgetsPane() {
+        val items = widgetItems()
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             for (r in 0 until 2) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     for (c in 0 until 2) {
                         val i = r * 2 + c
-                        WidgetTile(items[i], widgetIndex == i, Modifier.weight(1f))
+                        WidgetTile(items[i], personalZone == 1 && paneIndex == i, Modifier.weight(1f))
                     }
                 }
-                Spacer(Modifier.height(8.dp))
             }
         }
     }
@@ -1279,63 +1693,26 @@ class ControlCenter(
         }
     }
 
-    // ---- Clock page (second control center: the clock styles) ----
+    // -- Animations choice --
 
     @Composable
-    private fun ClockPage() {
+    private fun AnimationsPane() {
         val clear = LocalClear.current
-        Column(Modifier.fillMaxSize()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Image(rememberVectorPainter(Icons.Rounded.ChevronLeft), null, Modifier.size(26.dp), colorFilter = ColorFilter.tint(White.copy(alpha = 0.7f)))
-                BasicText(str(R.string.cc_clock), style = txt(White, 24.sp, FontWeight.Bold).shade(clear))
-            }
-            Spacer(Modifier.height(12.dp))
-            for (r in 0 until 3) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (c in 0 until 2) {
-                        val i = r * 2 + c
-                        if (i < ClockStyle.COUNT) {
-                            ClockTile(i, clockIndex == i, repo.clockStyle == i, Modifier.weight(1f))
-                        } else {
-                            Spacer(Modifier.weight(1f))
-                        }
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-            }
+        Column {
+            ModuleTile(
+                Tile(Icons.Rounded.Animation, str(R.string.cc_animations), animStatus(), sys.animationScale() < 1f, Orange),
+                personalZone == 1, Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(8.dp))
+            BasicText(
+                "Press OK to change the animation speed.",
+                Modifier.padding(horizontal = 6.dp),
+                style = txt(White.copy(alpha = 0.6f), 12.sp, FontWeight.Medium).shade(clear),
+            )
         }
     }
 
-    /** One clock style: a small preview and its name; a green check marks the style that is in use. */
-    @Composable
-    private fun ClockTile(style: Int, focused: Boolean, selected: Boolean, modifier: Modifier) {
-        val clear = LocalClear.current
-        val f = focusAmount(focused)
-        val fg = lerp(White, Ink, f)
-        val shape = RoundedCornerShape(26.dp)
-        Column(
-            modifier
-                .height(120.dp)
-                .graphicsLayer { scaleX = 1f + 0.05f * f; scaleY = 1f + 0.05f * f }
-                .background(lerp(restFill(clear, 0.10f), White.copy(alpha = 0.95f), f), shape)
-                .glassEdge(clear, f, shape)
-                .padding(12.dp),
-            verticalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                Box(Modifier.weight(1f).height(52.dp), contentAlignment = Alignment.CenterStart) {
-                    ClockMini(style, fg)
-                }
-                if (selected) {
-                    Box(
-                        Modifier.size(22.dp).clip(CircleShape).background(Green),
-                        contentAlignment = Alignment.Center,
-                    ) { Icon(Icons.Rounded.Check, White, 14) }
-                }
-            }
-            BasicText(clockName(style), style = txt(fg, 15.sp, FontWeight.SemiBold), maxLines = 1)
-        }
-    }
+    // ---- Detail pages (Wi-Fi, Bluetooth, ADB) ----
 
     @Composable
     private fun DetailPage(p: CcPage) {
@@ -1345,7 +1722,7 @@ class ControlCenter(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Image(rememberVectorPainter(Icons.Rounded.ChevronLeft), null, Modifier.size(26.dp), colorFilter = ColorFilter.tint(White.copy(alpha = 0.7f)))
                 BasicText(
-                    when (p) { CcPage.Wifi -> "Wi-Fi"; CcPage.Adb -> "ADB"; CcPage.Icons -> "Icon pack"; CcPage.Wallpapers -> "Wallpaper"; else -> "Bluetooth" },
+                    when (p) { CcPage.Wifi -> "Wi-Fi"; CcPage.Adb -> "ADB"; else -> "Bluetooth" },
                     style = txt(White, 24.sp, FontWeight.Bold).shade(clear),
                 )
             }
