@@ -40,7 +40,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
-import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
@@ -145,6 +144,7 @@ import com.fares.glass.sys.AdbController
 import com.fares.glass.sys.BluetoothController
 import com.fares.glass.sys.BtKind
 import com.fares.glass.sys.DimOverlay
+import com.fares.glass.sys.NowPlaying
 import com.fares.glass.sys.QuickActions
 import com.fares.glass.sys.SettingsShortcuts
 import com.fares.glass.sys.SettingsShortcuts.Section
@@ -324,6 +324,7 @@ private val Purple = Color(0xFFBF5AF2)
  *   round buttons (the center one is "Glass settings")
  *
  * ADB_BTN is the round ADB button at the top right, next to the clock.
+ * CcMediaTile is the square now playing tile to the left of the panel (Left from Wi-Fi, Miracast or Hidden apps).
  */
 private const val WIFI = 0
 private const val BLUETOOTH = 1
@@ -337,6 +338,9 @@ private const val SLEEP = 8
 private const val SHUTDOWN = 9
 private const val FIRST_BOTTOM = 10
 private const val ADB_BTN = 100
+
+/** The square now playing tile next to the panel (HomeScreen draws it and reads this number). */
+const val CcMediaTile = 101
 
 private val SunYellow = Color(0xFFFFD60A)
 
@@ -411,6 +415,8 @@ class ControlCenter(
 
     var page by mutableStateOf(CcPage.Main)
     var index by mutableIntStateOf(0)
+    /** Selected button of the now playing tile: 0 = previous, 1 = play/pause, 2 = next. */
+    var mediaSub by mutableIntStateOf(1)
     /** Selected item on a detail page, identified by its key. */
     var rowKey by mutableStateOf("toggle")
     /** Network whose password is being typed (the on-screen keyboard is open). */
@@ -944,6 +950,11 @@ class ControlCenter(
             SHOT -> quickScreenshot()
             SLEEP -> quickSleep()
             SHUTDOWN -> quickShutdown()
+            CcMediaTile -> when (mediaSub) {
+                0 -> NowPlaying.previous()
+                1 -> NowPlaying.togglePlayPause()
+                else -> NowPlaying.next()
+            }
             ADB_BTN -> openAdb()
             else -> {
                 val s = bottom.getOrNull(index - FIRST_BOTTOM)
@@ -959,6 +970,22 @@ class ControlCenter(
         // The ADB button sits above the first row of tiles.
         if (i == ADB_BTN) {
             if (dy > 0) index = BLUETOOTH else if (dx < 0) index = WIFI
+            return
+        }
+        // The now playing tile sits to the left of the panel: Left / Right pick a button,
+        // Right from the last button goes into the panel, Down goes to Miracast.
+        if (i == CcMediaTile) {
+            when {
+                dx < 0 -> if (mediaSub > 0) mediaSub -= 1
+                dx > 0 -> if (mediaSub < 2) mediaSub += 1 else index = WIFI
+                dy > 0 -> index = MIRACAST
+            }
+            return
+        }
+        // Left from the first column of the panel goes to the now playing tile (on its "next" button).
+        if (dx < 0 && (i == WIFI || i == MIRACAST || i == HIDDEN)) {
+            index = CcMediaTile
+            mediaSub = 2
             return
         }
         // The two sliders are vertical: Up / Down change the value, Left / Right move the selection.
@@ -1408,6 +1435,7 @@ class ControlCenter(
             BasicText(
                 when {
                     index == ADB_BTN -> "ADB"
+                    index == CcMediaTile -> "Now playing"
                     k in bottom.indices -> {
                         val s = bottom[k]
                         if (s == null) (if (updateUrl != null) "Glass settings \u00B7 Update available" else "Glass settings") else str(s.title)
