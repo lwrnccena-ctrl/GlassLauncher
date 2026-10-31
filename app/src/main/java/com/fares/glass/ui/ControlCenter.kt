@@ -302,7 +302,7 @@ private sealed interface Line {
         override val key get() = "pack:${pkg ?: "default"}"
     }
     /** A wallpaper choice. index matches AppRepository.wallpaperIndex (the last one is "Auto"). */
-    data class Wall(val index: Int, val title: String, val selected: Boolean) : Line {
+    data class Wall(val index: Int, val title: String, val selected: Boolean, val subtitle: String = "") : Line {
         override val key get() = "wall:$index"
     }
 }
@@ -757,7 +757,12 @@ class ControlCenter(
         CcPage.Clock -> emptyList()
         CcPage.Wallpapers -> buildList {
             val current = repo.wallpaperIndex % wallpaperNames.size.coerceAtLeast(1)
-            wallpaperNames.forEachIndexed { i, name -> add(Line.Wall(i, name, i == current)) }
+            val autoIndex = wallpaperNames.lastIndex
+            // Still wallpapers: the generated ones and your own photo. Dynamic: the sky that follows time and weather.
+            add(Line.Header("Still wallpaper"))
+            for (i in 0 until autoIndex) add(Line.Wall(i, wallpaperNames[i], i == current))
+            add(Line.Header("Dynamic"))
+            if (autoIndex >= 0) add(Line.Wall(autoIndex, wallpaperNames[autoIndex], autoIndex == current, "Follows the time of day and weather"))
         }
         CcPage.Icons -> buildList {
             add(Line.Pack(null, "Default", "Each app's own banner or logo", iconPack == null))
@@ -1429,7 +1434,12 @@ class ControlCenter(
                         is Line.Wall -> {
                             Icon(Icons.Rounded.Wallpaper, fg, 20)
                             Spacer(Modifier.width(10.dp))
-                            BasicText(r.title, Modifier.weight(1f), style = txt(fg, 14.sp, FontWeight.SemiBold), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Column(Modifier.weight(1f)) {
+                                BasicText(r.title, style = txt(fg, 14.sp, FontWeight.SemiBold), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (r.subtitle.isNotEmpty()) {
+                                    BasicText(r.subtitle, style = txt(fg.copy(alpha = 0.6f), 11.sp, FontWeight.Medium), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
                             if (r.selected) Icon(Icons.Rounded.Check, if (f > 0.5f) Ink else Green, 18)
                         }
                         is Line.Link -> {
