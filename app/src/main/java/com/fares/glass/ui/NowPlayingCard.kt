@@ -72,8 +72,12 @@ private fun fmt(ms: Long): String {
 /** Width of the wide card on the home screen. */
 private val WideWidth = 290.dp
 
-/** Side of the square tile that sits next to the Control Center. */
-val MediaTileSide = 196.dp
+/** Size of the tile next to the Control Center: two tile rows tall (64 + 8 + 64), level with Wi-Fi and Miracast. */
+val MediaTileW = 210.dp
+val MediaTileH = 136.dp
+
+/** Kept so older code that still mentions it compiles. */
+val MediaTileSide = MediaTileH
 
 /** Round button: plain icon at rest, a white circle with a dark icon when selected. */
 @Composable
@@ -191,73 +195,74 @@ fun NowPlayingCard(backdrop: Backdrop, focus: Int, modifier: Modifier = Modifier
 }
 
 /**
- * The square tile (cover and cast icon on top, title in the middle, the three buttons at the bottom).
- * When nothing is playing it says "Not playing". Its natural size is MediaTileSide x MediaTileSide.
+ * The tile next to the Control Center, two tile rows tall:
+ * cover + title + cast icon on top, the three buttons at the bottom.
+ * When nothing is playing it says "Not playing". Its natural size is MediaTileW x MediaTileH.
  * focus: -1 = none, 0 = previous, 1 = play/pause, 2 = next.
  */
 @Composable
 private fun TileBody(focus: Int) {
     val playing = NowPlaying.active
-    Box(Modifier.fillMaxSize().padding(16.dp)) {
-        Row(Modifier.fillMaxWidth().align(Alignment.TopStart), verticalAlignment = Alignment.Top) {
+    Column(
+        Modifier.fillMaxSize().padding(12.dp),
+        verticalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             if (playing) {
                 val art = NowPlaying.art
                 Box(
-                    Modifier.size(58.dp).clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.15f)),
+                    Modifier.size(46.dp).clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.15f)),
                     contentAlignment = Alignment.Center,
                 ) {
                     if (art != null) {
                         Image(art, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                     } else {
                         Image(
-                            rememberVectorPainter(Icons.Rounded.MusicNote), null, Modifier.size(28.dp),
+                            rememberVectorPainter(Icons.Rounded.MusicNote), null, Modifier.size(24.dp),
                             colorFilter = ColorFilter.tint(Color.White),
                         )
                     }
                 }
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    BasicText(
+                        NowPlaying.title.ifBlank { "Now playing" },
+                        style = txt(Color.White, 15.sp, FontWeight.Bold),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                    if (NowPlaying.artist.isNotBlank()) {
+                        BasicText(
+                            NowPlaying.artist,
+                            style = txt(Color.White.copy(alpha = 0.6f), 12.sp, FontWeight.Medium),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            } else {
+                BasicText(
+                    "Not playing",
+                    Modifier.weight(1f),
+                    style = txt(Color.White.copy(alpha = 0.6f), 15.sp, FontWeight.Medium),
+                )
             }
-            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.width(8.dp))
             Image(
-                rememberVectorPainter(Icons.Rounded.Cast), null, Modifier.size(28.dp),
+                rememberVectorPainter(Icons.Rounded.Cast), null, Modifier.size(22.dp),
                 colorFilter = ColorFilter.tint(Color.White.copy(alpha = 0.85f)),
             )
         }
 
-        if (playing) {
-            Column(Modifier.align(Alignment.CenterStart).padding(top = 8.dp)) {
-                BasicText(
-                    NowPlaying.title.ifBlank { "Now playing" },
-                    style = txt(Color.White, 19.sp, FontWeight.Bold),
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
-                if (NowPlaying.artist.isNotBlank()) {
-                    BasicText(
-                        NowPlaying.artist,
-                        style = txt(Color.White.copy(alpha = 0.6f), 13.sp, FontWeight.Medium),
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-        } else {
-            BasicText(
-                "Not playing",
-                Modifier.align(Alignment.Center).padding(bottom = 18.dp),
-                style = txt(Color.White.copy(alpha = 0.6f), 17.sp, FontWeight.Medium),
-            )
-        }
-
         Row(
-            Modifier.fillMaxWidth().align(Alignment.BottomCenter)
-                .graphicsLayer { alpha = if (playing) 1f else 0.55f },
+            Modifier.fillMaxWidth().graphicsLayer { alpha = if (playing) 1f else 0.55f },
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            MediaButton(Icons.Rounded.SkipPrevious, 22.dp, focus == 0)
+            MediaButton(Icons.Rounded.SkipPrevious, 20.dp, focus == 0)
             MediaButton(
                 if (NowPlaying.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                28.dp, focus == 1,
+                26.dp, focus == 1,
             )
-            MediaButton(Icons.Rounded.SkipNext, 22.dp, focus == 2)
+            MediaButton(Icons.Rounded.SkipNext, 20.dp, focus == 2)
         }
     }
 }
@@ -294,9 +299,10 @@ private fun ScaledContent(
 }
 
 /**
- * The now playing card flying to the Control Center and turning into the square tile (and back).
+ * The now playing card flying to the Control Center and turning into the two-row tile (and back).
  *
  * progress: 0 = the wide card where it sits on the home screen, 1 = the tile next to the Control Center.
+ *   It is allowed to go a little past 1 (and a little below 0): that is the spring bounce.
  * from: where the wide card is on the screen, in pixels (null = nothing is playing, so the tile just grows in).
  * to: where the tile belongs, in pixels.
  * alpha: overall opacity (used to hide the tile on the wide Personalization page).
@@ -313,7 +319,9 @@ fun MediaMorph(
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
-    val p = progress().coerceIn(0f, 1f)
+    // Not clamped: the spring overshoots, and that overshoot is what makes the card bounce.
+    val p = progress()
+    val pc = p.coerceIn(0f, 1f)
 
     // With nothing playing there is no card to fly from: the tile grows out of its own middle.
     val start = from ?: Rect(
@@ -322,16 +330,16 @@ fun MediaMorph(
     )
     val left = start.left + (to.left - start.left) * p
     val top = start.top + (to.top - start.top) * p
-    val w = start.width + (to.width - start.width) * p
-    val h = start.height + (to.height - start.height) * p
+    val w = (start.width + (to.width - start.width) * p).coerceAtLeast(1f)
+    val h = (start.height + (to.height - start.height) * p).coerceAtLeast(1f)
 
-    val shape = RoundedCornerShape((24f + 12f * p).dp)
-    val wideAlpha = if (from == null) 0f else (1f - p * 2.2f).coerceIn(0f, 1f)
-    val tileAlpha = if (from == null) 1f else ((p - 0.3f) / 0.5f).coerceIn(0f, 1f)
-    val total = alpha * (if (from == null) (p * 2f).coerceIn(0f, 1f) else 1f)
+    val shape = RoundedCornerShape((24f + 6f * pc).dp)
+    val wideAlpha = if (from == null) 0f else (1f - pc * 2.2f).coerceIn(0f, 1f)
+    val tileAlpha = if (from == null) 1f else ((pc - 0.3f) / 0.5f).coerceIn(0f, 1f)
+    val total = alpha * (if (from == null) (pc * 2f).coerceIn(0f, 1f) else 1f)
 
     val wideNaturalPx = with(density) { WideWidth.toPx() }
-    val tileNaturalPx = with(density) { MediaTileSide.toPx() }
+    val tileNaturalPx = with(density) { MediaTileW.toPx() }
 
     Glass(
         backdrop,
@@ -347,7 +355,7 @@ fun MediaMorph(
                 ScaledContent(WideWidth, null, w / wideNaturalPx, wideAlpha) { WideBody(-1) }
             }
             if (tileAlpha > 0f) {
-                ScaledContent(MediaTileSide, MediaTileSide, w / tileNaturalPx, tileAlpha) { TileBody(focus) }
+                ScaledContent(MediaTileW, MediaTileH, w / tileNaturalPx, tileAlpha) { TileBody(focus) }
             }
         }
     }
