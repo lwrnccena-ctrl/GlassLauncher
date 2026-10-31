@@ -482,6 +482,11 @@ class ControlCenter(
         bt.start()
         tick++
         levels.refresh()
+        val nowMs = System.currentTimeMillis()
+        if (nowMs - lastAutoCheck > 60 * 60 * 1000L) {
+            lastAutoCheck = nowMs
+            checkUpdate(silent = true)
+        }
     }
 
     fun close() {
@@ -549,16 +554,22 @@ class ControlCenter(
         Result.failure<Pair<String, String>>(Exception("Couldn't reach GitHub. Check the Wi-Fi."))
     }
 
-    private fun checkUpdate() {
+    private var lastAutoCheck = 0L
+
+    /** silent = true: runs in the background and only reports when a newer version exists. */
+    private fun checkUpdate(silent: Boolean = false) {
         if (updateBusy) return
-        val link = updateUrl
-        if (link != null) {
-            // A newer version was found: OK opens its download page.
-            runCatching { onOpen(Intent(Intent.ACTION_VIEW, Uri.parse(link)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-            return
+        if (silent && updateUrl != null) return
+        if (!silent) {
+            val link = updateUrl
+            if (link != null) {
+                // A newer version was found: OK opens its download page.
+                runCatching { onOpen(Intent(Intent.ACTION_VIEW, Uri.parse(link)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                return
+            }
+            updateStatus = "Checking GitHub\u2026"
         }
         updateBusy = true
-        updateStatus = "Checking GitHub\u2026"
         scope.launch {
             val local = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "0"
             val result = withContext(Dispatchers.IO) { fetchLatestRelease() }
@@ -566,11 +577,11 @@ class ControlCenter(
                 if (isNewer(tag, local)) {
                     updateUrl = url
                     updateStatus = "New version $tag available (you have $local). Press OK to open the download page."
-                } else {
+                } else if (!silent) {
                     updateStatus = "You're up to date ($local)."
                 }
             }.onFailure {
-                updateStatus = it.message ?: "Couldn't check for updates."
+                if (!silent) updateStatus = it.message ?: "Couldn't check for updates."
             }
             updateBusy = false
         }
@@ -801,11 +812,26 @@ class ControlCenter(
     private fun placeholder(icon: ImageVector, title: String, accent: Color, status: String = "Placeholder") =
         Tile(icon, title, status, false, accent)
 
+    /** Opens the TV's cast / screen mirroring settings, or Display settings if there is none. */
+    private fun openMiracast() {
+        val pm = context.packageManager
+        val actions = listOf(
+            "android.settings.CAST_SETTINGS",
+            "android.settings.WIFI_DISPLAY_SETTINGS",
+            "com.android.settings.WIFI_DISPLAY_SETTINGS",
+        )
+        for (a in actions) {
+            val i = Intent(a).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (i.resolveActivity(pm) != null) { onOpen(i); return }
+        }
+        open(Section.Display)
+    }
+
     private fun selectMain() {
         when (index) {
             WIFI -> { page = CcPage.Wifi; rowKey = "toggle"; askPermissions(); wifi.scan() }
             BLUETOOTH -> { page = CcPage.Bluetooth; rowKey = "toggle"; askPermissions() }
-            MIRACAST -> Unit // placeholder
+            MIRACAST -> openMiracast()
             HIDDEN -> repo.unhideAll()
             BRIGHTNESS -> Unit // Up / Down change it
             VOLUME -> levels.toggleMute()
@@ -1261,7 +1287,12 @@ class ControlCenter(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 bottom.forEachIndexed { k, s ->
-                    RoundButton(if (s == null) Icons.Rounded.Tune else s.icon, index == FIRST_BOTTOM + k)
+                    Box {
+                        RoundButton(if (s == null) Icons.Rounded.Tune else s.icon, index == FIRST_BOTTOM + k)
+                        if (s == null && updateUrl != null) {
+                            Box(Modifier.align(Alignment.TopEnd).size(11.dp).clip(CircleShape).background(Color(0xFFFF453A)))
+                        }
+                    }
                 }
             }
             Spacer(Modifier.height(6.dp))
@@ -1271,7 +1302,7 @@ class ControlCenter(
                     index == ADB_BTN -> "ADB"
                     k in bottom.indices -> {
                         val s = bottom[k]
-                        if (s == null) "Glass settings" else str(s.title)
+                        if (s == null) (if (updateUrl != null) "Glass settings \u00B7 Update available" else "Glass settings") else str(s.title)
                     }
                     else -> " "
                 },
