@@ -150,13 +150,16 @@ object AdbController {
         return raw.split(":").any { sameService(it, service) }
     }
 
-    /** Turns an accessibility service on without removing the ones that are already on. */
+    /**
+     * Turns an accessibility service on without removing the ones that are already on.
+     *
+     * The current list is read straight from Settings.Secure (not through an ADB `settings get`),
+     * because an ADB read can come back empty and the old code then wrote only the new service,
+     * which switched the others off.
+     */
     suspend fun enableAccessibility(ctx: Context, service: String): Result {
-        val cur = run(ctx, "settings get secure enabled_accessibility_services")
-        if (!cur.ok) return cur
-        val list = cur.output.trim()
-            .takeUnless { it == "null" || it == "Done" }
-            ?.split(":")?.filter { it.isNotBlank() } ?: emptyList()
+        val raw = Settings.Secure.getString(ctx.contentResolver, "enabled_accessibility_services").orEmpty()
+        val list = raw.split(":").filter { it.isNotBlank() && it != "null" }
         val merged = if (list.any { sameService(it, service) }) list else list + service
         return run(
             ctx,
