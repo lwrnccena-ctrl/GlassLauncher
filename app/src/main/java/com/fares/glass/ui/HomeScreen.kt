@@ -113,9 +113,6 @@ private val HeaderTop = 30.dp
 /** The media tile sits this far to the left of the Control Center panel. */
 private val MediaTileGap = 14.dp
 
-/** How long (ms) the now playing card takes to fly to the tile when the Control Center opens. */
-private const val MediaFlyMs = 520f
-
 /** Time curve of the weather panel opening (the edges add their own ease on top of it). */
 private val IslandEasing = CubicBezierEasing(0.215f, 0.61f, 0.355f, 1f)
 
@@ -280,12 +277,17 @@ fun HomeScreen(
     val ccReveal = remember { CcReveal({ ccAnim.value }, { state.mode == Mode.Control }) }
 
     // Progress of the now playing card turning into the Control Center tile (0 = card, 1 = tile).
-    // It is a bit quicker than the whole opening, so the tile has landed when the panel settles.
-    val mediaMorph: () -> Float = {
-        val t = ccAnim.value
-        if (ccOpen) FastOutSlowInEasing.transform((t * CcOpenMs / MediaFlyMs).coerceIn(0f, 1f))
-        else FastOutSlowInEasing.transform(t.coerceIn(0f, 1f))
-    }
+    // It is a spring: it overshoots a little (the bounce) and, if the key is pressed again halfway,
+    // it keeps its speed and turns around smoothly.
+    val mediaSpring = animateFloatAsState(
+        if (ccOpen) 1f else 0f,
+        GlassSpring.card,
+        label = "mediaSpring",
+    )
+    val mediaMorph: () -> Float = { mediaSpring.value }
+    // The flying card stays on screen until the spring has completely settled (it can outlast the
+    // panel's fast closing animation).
+    val mediaShown by remember { derivedStateOf { ccAnim.value > 0.001f || mediaSpring.value != 0f } }
     // The tile is hidden on the wide Personalization page, where the panel would cover it.
     val tilePageAlpha by animateFloatAsState(
         if (cc.page == CcPage.Personalization) 0f else 1f, tween(200), label = "tilePage",
@@ -836,8 +838,8 @@ fun HomeScreen(
                             NowPlayingCard(
                                 backdrop, mediaFocus,
                                 Modifier
-                                    .graphicsLayer { alpha = if (ccShown) 0f else 1f }
-                                    .onGloballyPositioned { if (!ccShown) cardBounds = it.boundsInRoot() },
+                                    .graphicsLayer { alpha = if (mediaShown) 0f else 1f }
+                                    .onGloballyPositioned { if (!mediaShown) cardBounds = it.boundsInRoot() },
                             )
                         }
                     }
@@ -858,8 +860,8 @@ fun HomeScreen(
                         Modifier
                             .align(Alignment.TopEnd)
                             .padding(top = 84.dp, end = Metrics.Margin)
-                            .graphicsLayer { alpha = headerAlpha * (if (ccShown) 0f else 1f) }
-                            .onGloballyPositioned { if (!ccShown) cardBounds = it.boundsInRoot() },
+                            .graphicsLayer { alpha = headerAlpha * (if (mediaShown) 0f else 1f) }
+                            .onGloballyPositioned { if (!mediaShown) cardBounds = it.boundsInRoot() },
                     )
                 }
             }
@@ -943,12 +945,16 @@ fun HomeScreen(
 
         // The now playing card flies to the left of the Control Center and turns into the square tile
         // (and back when it closes). It is drawn outside the blurred scene, so it stays sharp.
-        if (ccShown && Features.music && screenWpx > 0) {
+        if (mediaShown && Features.music && screenWpx > 0) {
             val tileRect = with(density) {
-                val side = MediaTileSide.toPx()
+                val w = MediaTileW.toPx()
                 val right = screenWpx - PanelEnd.toPx() - PanelWidth.toPx() - MediaTileGap.toPx()
-                val top = (PanelTop + 8.dp).toPx()
-                androidx.compose.ui.geometry.Rect(right - side, top, right, top + side)
+                // Level with the Wi-Fi row at the top and the Miracast row at the bottom (measured from the
+                // panel itself). Before the panel has been laid out, a close guess is used for one frame.
+                val slot = cc.mediaSlot()
+                val top = slot?.first ?: (PanelTop + 8.dp + 58.dp).toPx()
+                val bottom = slot?.second ?: (top + MediaTileH.toPx())
+                androidx.compose.ui.geometry.Rect(right - w, top, right, bottom)
             }
             MediaMorph(
                 backdrop = backdrop,
