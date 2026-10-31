@@ -36,6 +36,9 @@
     <uses-permission android:name="android.permission.WRITE_SETTINGS"
         xmlns:tools="http://schemas.android.com/tools" tools:ignore="ProtectedPermissions" />
 
+    <!-- Screen dim tile: dark layer over everything. Granted over ADB: `appops set com.fares.glass SYSTEM_ALERT_WINDOW allow` -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
     <!-- Recent apps: Up on a card closes that app -->
     <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
 
