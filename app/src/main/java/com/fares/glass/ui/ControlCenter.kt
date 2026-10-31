@@ -97,6 +97,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -122,6 +123,7 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -324,7 +326,7 @@ private val Purple = Color(0xFFBF5AF2)
  *   round buttons (the center one is "Glass settings")
  *
  * ADB_BTN is the round ADB button at the top right, next to the clock.
- * CcMediaTile is the square now playing tile to the left of the panel (Left from Wi-Fi, Miracast or Hidden apps).
+ * CcMediaTile is the now playing tile (two tile rows tall) to the left of the panel (Left from Wi-Fi, Miracast or Hidden apps).
  */
 private const val WIFI = 0
 private const val BLUETOOTH = 1
@@ -417,6 +419,18 @@ class ControlCenter(
     var index by mutableIntStateOf(0)
     /** Selected button of the now playing tile: 0 = previous, 1 = play/pause, 2 = next. */
     var mediaSub by mutableIntStateOf(1)
+    /**
+     * Where the Wi-Fi row and the Miracast row sit on the screen (pixels, only the vertical part: the panel
+     * never slides up or down). The now playing tile lines up with them: it starts level with Wi-Fi and
+     * ends level with the bottom of Miracast, so it is exactly two tile rows tall.
+     */
+    private var row1Top by mutableFloatStateOf(-1f)
+    private var row1Height by mutableFloatStateOf(0f)
+    private var row2Top by mutableFloatStateOf(-1f)
+
+    /** (top, bottom) in pixels of the two-row slot for the now playing tile, or null before the panel was laid out. */
+    fun mediaSlot(): Pair<Float, Float>? =
+        if (row1Top < 0f || row2Top < 0f || row1Height <= 0f) null else row1Top to (row2Top + row1Height)
     /** Selected item on a detail page, identified by its key. */
     var rowKey by mutableStateOf("toggle")
     /** Network whose password is being typed (the on-screen keyboard is open). */
@@ -1351,14 +1365,24 @@ class ControlCenter(
             Spacer(Modifier.height(8.dp))
 
             // Row 1: Wi-Fi | Bluetooth
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                Modifier.fillMaxWidth().onGloballyPositioned {
+                    val b = it.boundsInRoot()
+                    row1Top = b.top
+                    row1Height = b.height
+                },
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 ModuleTile(t[0], index == WIFI, Modifier.weight(1f).revealFromCorner(host, reveal, 2))
                 ModuleTile(t[1], index == BLUETOOTH, Modifier.weight(1f).revealFromCorner(host, reveal, 1))
             }
             Spacer(Modifier.height(8.dp))
 
             // Rows 2-3: Miracast / Hidden apps on the left, two vertical sliders on the right.
-            Row(Modifier.fillMaxWidth().height(TileHeight * 2 + 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                Modifier.fillMaxWidth().height(TileHeight * 2 + 8.dp).onGloballyPositioned { row2Top = it.boundsInRoot().top },
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     ModuleTile(
                         placeholder(Icons.Rounded.Cast, "Miracast", WifiBlue, "Cast screen"),
