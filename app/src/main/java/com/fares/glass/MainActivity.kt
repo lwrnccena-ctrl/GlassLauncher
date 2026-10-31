@@ -42,6 +42,7 @@ import com.fares.glass.sys.WifiController
 import com.fares.glass.ui.Backdrop
 import com.fares.glass.ui.Command
 import com.fares.glass.ui.ControlCenter
+import com.fares.glass.ui.FirstRunName
 import com.fares.glass.ui.HomeScreen
 import com.fares.glass.ui.HomeState
 import com.fares.glass.ui.Mode
@@ -70,6 +71,8 @@ class MainActivity : ComponentActivity() {
     private val skyWallpaper = mutableStateOf(false)
     // Starts as a placeholder so the text shows "--°C" until the first real answer arrives.
     private val weatherState = mutableStateOf<Weather?>(Weather.Placeholder)
+    // True while the first-run screen (Hello + name) is showing.
+    private val needsName = mutableStateOf(false)
     private lateinit var cc: ControlCenter
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         cc.onPermissionsResult()
@@ -126,6 +129,22 @@ class MainActivity : ComponentActivity() {
             addAction(Intent.ACTION_PACKAGE_REPLACED)
             addDataScheme("package")
         })
+
+        // First run: only a brand-new install shows the Hello screen and asks for a name.
+        // Someone who already had Glass and just updated it is marked as done, so they never see it.
+        // A name passed over ADB (--es name) also skips it.
+        val firstRun = getSharedPreferences("glass_first_run", Context.MODE_PRIVATE)
+        if (!firstRun.contains("named")) {
+            val isUpdate = runCatching {
+                val info = packageManager.getPackageInfo(packageName, 0)
+                info.lastUpdateTime - info.firstInstallTime > 60_000L
+            }.getOrDefault(false)
+            if (isUpdate || intent.getStringExtra("name") != null) {
+                firstRun.edit().putBoolean("named", true).apply()
+            }
+        }
+        needsName.value = !firstRun.getBoolean("named", false)
+
         setContent {
             // The layout is designed for a 960 dp wide screen (a 1080p Fire TV). TVs report all kinds of
             // densities, so scale it to fill the screen whatever the resolution and dpi.
@@ -141,6 +160,15 @@ class MainActivity : ComponentActivity() {
                         tvWallpaper = skyWallpaper.value,
                         onSetLocation = ::setManualLocation,
                     )
+                    if (needsName.value) {
+                        FirstRunName(
+                            onSave = { n ->
+                                repo.setName(n)
+                                firstRun.edit().putBoolean("named", true).apply()
+                            },
+                            onFinished = { needsName.value = false },
+                        )
+                    }
                 }
             }
         }
