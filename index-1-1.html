@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Glass Launcher – a tvOS-style home screen for Android TV</title>
+<style>
+:root{--bg:#0b0d1a;--bg2:#1b1540;--ink:#f4f5fb;--mute:#a9b0c8;--card:rgba(255,255,255,.07);--line:rgba(255,255,255,.14);--accent:#8fb2ff;--accent-ink:#0a1030;--glow:rgba(120,90,255,.35);
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:dark light}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]){--bg:#f2f3fa;--bg2:#e3e0fa;--ink:#151829;--mute:#545b78;--card:rgba(255,255,255,.7);--line:rgba(20,24,41,.12);--accent:#3a5bff;--accent-ink:#fff;--glow:rgba(100,80,255,.2)}}
+:root[data-theme="light"]{--bg:#f2f3fa;--bg2:#e3e0fa;--ink:#151829;--mute:#545b78;--card:rgba(255,255,255,.7);--line:rgba(20,24,41,.12);--accent:#3a5bff;--accent-ink:#fff;--glow:rgba(100,80,255,.2)}
+html{scroll-padding-top:env(safe-area-inset-top,0px);scroll-behavior:smooth}
+*{box-sizing:border-box}
+body{margin:0;background-color:var(--bg);background-image:radial-gradient(900px 500px at 15% -5%,var(--bg2),transparent),radial-gradient(800px 500px at 100% 30%,var(--glow),transparent);color:var(--ink);font:17px/1.6 -apple-system,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:1040px;margin:0 auto;padding:0 22px}
+.hero{text-align:center;padding:70px 0 30px}
+.tag{display:inline-block;border:1px solid var(--line);background:var(--card);border-radius:999px;padding:6px 16px;font-size:14px;color:var(--mute);margin-bottom:22px}
+h1{font-size:clamp(44px,9vw,92px);line-height:1;letter-spacing:-.035em;margin:0 0 20px}
+h2{font-size:clamp(28px,5vw,40px);letter-spacing:-.025em;line-height:1.1;margin:0 0 12px}
+p{color:var(--mute);margin:0 0 14px}
+.lead{font-size:clamp(18px,2.6vw,22px);max-width:640px;margin:0 auto 28px}
+.btn{display:inline-block;background:var(--accent);color:var(--accent-ink);text-decoration:none;font-weight:650;padding:15px 30px;border-radius:999px;margin:6px}
+.btn.alt{background:var(--card);color:var(--ink);border:1px solid var(--line)}
+a:focus-visible,.btn:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
+.shot{display:block;width:100%;height:auto;border-radius:20px;border:1px solid var(--line);box-shadow:0 30px 80px rgba(0,0,0,.45)}
+.hero .shot{margin-top:44px;border-radius:26px}
+.feat{display:grid;grid-template-columns:1fr 1.25fr;gap:40px;align-items:center;padding:56px 0}
+.feat.flip{grid-template-columns:1.25fr 1fr}
+.feat.flip .txt{order:2}
+.chip{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:650;margin-bottom:8px}
+@media (max-width:760px){.feat,.feat.flip{grid-template-columns:1fr;gap:22px;padding:34px 0}.feat.flip .txt{order:0}}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin:20px 0 50px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:20px}
+.card h3{margin:0 0 6px;font-size:18px}.card p{margin:0;font-size:16px}
+.dl{text-align:center;background:var(--card);border:1px solid var(--line);border-radius:28px;padding:44px 22px;margin:30px 0}
+ol{padding-left:22px;color:var(--mute);max-width:66ch}li{margin-bottom:10px}li b{color:var(--ink)}
+code{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:.92em;color:var(--ink)}
+footer{border-top:1px solid var(--line);margin-top:50px;padding:22px 0 40px;font-size:14px;color:var(--mute)}
+a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="hero">
+<span class="tag">Android TV 7.1+ · Fire TV · Fire OS 6</span>
+<h1>Glass Launcher</h1>
+<p class="lead">A tvOS-inspired home screen made of liquid glass, with weather, lyrics, media controls and a Control Center for your TV.</p>
+<a class="btn alt" href="https://github.com/lwrnccena-ctrl/GlassLauncher">View on GitHub</a>
+<img class="shot" src="docs/screenshots/home-screen.png" alt="Glass Launcher home screen with clock, weather and an app dock">
+</header>
+
+<section class="feat">
+<div class="txt"><div class="chip">Now playing</div><h2>Music and lyrics, right on Home</h2><p>Play, pause and skip from the home screen without opening the music app. Lyrics follow the song as it plays.</p></div>
+<img class="shot" src="docs/screenshots/media-lyrics.png" alt="Media playback card and lyrics on the home screen" loading="lazy">
+</section>
+
+<section class="feat flip">
+<div class="txt"><div class="chip">Control Center</div><h2>Everything in one glass panel</h2><p>Slides in from the right with Wi-Fi, Bluetooth, volume, Top Shelf, hidden apps, wallpaper and animation speed.</p></div>
+<img class="shot" src="docs/screenshots/control-center.png" alt="The Control Center panel" loading="lazy">
+</section>
+
+<section class="feat">
+<div class="txt"><div class="chip">Widgets</div><h2>Show only what you want</h2><p>Turn the Verse, Music, Lyrics and Weather widgets on or off from the Control Center.</p></div>
+<img class="shot" src="docs/screenshots/widgets.png" alt="The Widgets panel with toggles" loading="lazy">
+</section>
+
+<section class="feat flip">
+<div class="txt"><div class="chip">Overlay</div><h2>Open it over any app</h2><p>The Control Center works as an overlay on top of other apps, using an Android accessibility service.</p></div>
+<img class="shot" src="docs/screenshots/control-center-overlay.png" alt="Control Center overlay on top of a video" loading="lazy">
+</section>
+
+<section class="feat">
+<div class="txt"><div class="chip">ADB</div><h2>Permissions at a glance</h2><p>See whether ADB is connected and whether the secure settings, media listener and location permissions are granted.</p></div>
+<img class="shot" src="docs/screenshots/adb-permissions.png" alt="The ADB permissions panel" loading="lazy">
+</section>
+
+<h2>And more</h2>
+<div class="grid">
+<div class="card"><h3>Weather</h3><p>Current weather next to the clock.</p></div>
+<div class="card"><h3>Recent apps</h3><p>Jump back to what you used last.</p></div>
+<div class="card"><h3>Home override</h3><p>An accessibility setting so the Home button opens Glass.</p></div>
+<div class="card"><h3>Auto wallpaper</h3><p>A mode that follows the sky and weather, plus your own photo.</p></div>
+<div class="card"><h3>Five languages</h3><p>English, French, Spanish, Portuguese and German.</p></div>
+<div class="card"><h3>Open source</h3><p>Code, issues and releases are on GitHub.</p></div>
+</div>
+
+<h2>Install on your TV</h2>
+<ol>
+<li><b>Get the file.</b> Open the release page and pick the APK under Assets. On your TV use the Downloader app, or copy it over with a USB drive.</li>
+<li><b>Allow installs.</b> In <code>Settings › Apps › Special app access</code>, allow unknown sources for the app you open the APK with.</li>
+<li><b>Install.</b> Open the APK and choose Install, or run <code>adb install Glass.apk</code> from a computer.</li>
+<li><b>Set as home.</b> Press Home and choose Glass Launcher when asked.</li>
+</ol>
+
+<footer>Glass Launcher is an independent project, not affiliated with Apple or Google. Based on the original Glass launcher by tlfares. Android TV is a trademark of Google LLC.</footer>
+</div>
+</body>
+</html>
