@@ -39,6 +39,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -75,6 +76,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.fares.glass.R
@@ -102,10 +104,14 @@ sealed interface Command {
 private const val LONG_PRESS_MS = 450L
 private val MenuHeight = 196.dp
 private val MenuWidth = 260.dp
-private val DockInset = 20.dp
-private val DockTop = 18.dp
+/** Space around the icons inside the dock (sides / above); it follows Dock size in the settings. */
+private val DockInset: Dp
+    get() = when (DockSettings.dockSize) { 0 -> 12.dp; 2 -> 32.dp; else -> 20.dp }
+private val DockTop: Dp
+    get() = when (DockSettings.dockSize) { 0 -> 10.dp; 2 -> 28.dp; else -> 18.dp }
 /** Covers the row and the focus zoom (no names under dock icons). */
-private val DockHeight = Metrics.TileH + 36.dp
+private val DockHeight: Dp
+    get() = Metrics.TileH + DockTop * 2 + (if (DockSettings.label == 2) 24.dp else 0.dp)
 
 /** Top padding of the greeting column. */
 private val HeaderTop = 30.dp
@@ -168,7 +174,12 @@ fun HomeScreen(
     /** A city was chosen in the city picker (null = back to the automatic location). */
     onSetLocation: (Locator.Place?) -> Unit = {},
 ) {
-    val apps = repo.apps
+    // With Favorites row on, the apps pinned from the long-press menu come first, so they fill the dock.
+    val apps: List<AppEntry> = if (DockSettings.favorites && DockSettings.pinned.isNotEmpty()) {
+        val byPkg = repo.apps.associateBy { it.pkg }
+        val front = DockSettings.pinned.mapNotNull { byPkg[it] }.take(Metrics.COLS)
+        front + repo.apps.filter { a -> front.none { it.pkg == a.pkg } }
+    } else repo.apps
     val density = LocalDensity.current
     val context = LocalContext.current
     val focusRequester = remember { FocusRequester() }
@@ -281,7 +292,7 @@ fun HomeScreen(
     // it keeps its speed and turns around smoothly.
     val mediaSpring = animateFloatAsState(
         if (ccOpen) 1f else 0f,
-        GlassSpring.card,
+        GlassSpring.cardSpec(),
         label = "mediaSpring",
     )
     val mediaMorph: () -> Float = { mediaSpring.value }
@@ -333,7 +344,9 @@ fun HomeScreen(
         val wanted = screenHeightDp - rowOneTop + 4f   // how far it must go to hide the second row
         wanted.coerceIn(0f, room.coerceAtLeast(0f))
     }.dp
-    val topRowY = Metrics.TopRowY + dockDrop
+    // Dock height in the settings: the dock (and the first row) sits higher on the screen.
+    val dockLift = when (DockSettings.dockHeight) { 1 -> 28f; 2 -> 56f; else -> 0f }
+    val topRowY = Metrics.TopRowY + dockDrop - dockLift.dp
 
     val row = state.row
     val scrollTarget = if (row == 0) 0f else (topRowY + Metrics.Pitch * row - Metrics.GridRowY).value
@@ -348,6 +361,8 @@ fun HomeScreen(
     val blur by animateFloatAsState(if (inGrid) 1f else 0f, tween(blurMs), label = "blur")
     // The lyrics are only shown on the first row (like the greeting and the clock).
     val lyricsAlpha by animateFloatAsState(if (row == 0) 1f else 0f, tween(300), label = "lyricsAlpha")
+    // The rows under the dock stay hidden until you move down (matters when the dock is raised).
+    val lowerRows by animateFloatAsState(if (row == 0) 0f else 1f, tween(250), label = "lowerRows")
     val dim by animateFloatAsState(
         if (state.mode == Mode.Control || state.mode == Mode.Menu) 0.3f else 0f, tween(250), label = "dim",
     )
@@ -362,15 +377,139 @@ fun HomeScreen(
     )
     val islandShown by remember { derivedStateOf { islandAnim.value > 0.001f } }
 
+    // Auto-hide dock: after a few seconds without a key the dock slides away; any key brings it back.
+    var dockHidden by remember { mutableStateOf(false) }
+    var activity by remember { mutableIntStateOf(0) }
+    LaunchedEffect(activity, DockSettings.autoHide, state.mode, row, Recents.open, forecastOpen) {
+        val secs = when (DockSettings.autoHide) { 1 -> 5; 2 -> 10; else -> 0 }
+        if (secs == 0 || state.mode != Mode.Browse || row != 0 || Recents.open || forecastOpen) {
+            dockHidden = false
+            return@LaunchedEffect
+        }
+        delay(secs * 1000L)
+        dockHidden = true
+    }
+    val hideSlide by animateFloatAsState(
+        if (dockHidden) 1f else 0f, spring(dampingRatio = 0.8f, stiffness = 300f), label = "dockHide",
+    )
+
     val focused = apps.getOrNull(state.focus)
     val ambience = if (repo.topShelf && row == 0 && state.mode == Mode.Browse) {
         focused?.let { repo.visuals[it.pkg]?.ambience }
     } else null
 
-    val menu = menuItems()
+    // The long-press menu. With pinned apps in the dock the order is fixed by the pins, so Move is left out.
+    val canMove = !(DockSettings.favorites && DockSettings.pinned.isNotEmpty())
+    val menuKeys = buildList<String> {
+        if (canMove) add("move")
+        add("hide")
+        add("info")
+        if (DockSettings.favorites) add("pin")
+        add("lock")
+    }
+    val menu = menuItemsFor(menuKeys, DockSettings.isPinned(focused?.pkg), DockSettings.isLocked(focused?.pkg))
 
-    fun tileX(i: Int) = Metrics.Margin + (Metrics.TileW + Metrics.Gap) * (i % Metrics.COLS)
+    fun tileX(i: Int) = Metrics.RowStart + (Metrics.TileW + Metrics.Gap) * (i % Metrics.COLS)
     fun tileY(i: Int) = (topRowY + Metrics.Pitch * (i / Metrics.COLS)).value - scrollTarget
+
+    // ---- PIN dialog (app lock) ----
+    var pinMode by remember { mutableStateOf<PinMode?>(null) }
+    val pinDigits = remember { mutableStateListOf(0, 0, 0, 0) }
+    var pinPos by remember { mutableIntStateOf(0) }
+    var pinFirst by remember { mutableStateOf("") }
+    var pinMessage by remember { mutableStateOf("") }
+    var pinAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+
+    fun resetPinDigits() {
+        for (i in 0..3) pinDigits[i] = 0
+        pinPos = 0
+    }
+
+    fun openPin(mode: PinMode, message: String, action: () -> Unit) {
+        pinMode = mode
+        pinAction = action
+        pinMessage = message
+        pinFirst = ""
+        resetPinDigits()
+    }
+
+    /** Runs [action] after the right PIN was typed (at once when no PIN has been set). */
+    fun requirePin(message: String, action: () -> Unit) {
+        if (DockSettings.pin.isBlank()) action() else openPin(PinMode.Enter, message, action)
+    }
+
+    fun submitPin() {
+        val code = pinDigits.joinToString("")
+        when (pinMode) {
+            PinMode.Enter -> if (code == DockSettings.pin) {
+                val action = pinAction
+                pinMode = null
+                action?.invoke()
+            } else {
+                pinMessage = "Wrong PIN, try again"
+                resetPinDigits()
+            }
+            PinMode.SetNew -> {
+                pinFirst = code
+                pinMode = PinMode.Confirm
+                pinMessage = "Enter it once more"
+                resetPinDigits()
+            }
+            PinMode.Confirm -> if (code == pinFirst) {
+                DockSettings.setPin(code)
+                val action = pinAction
+                pinMode = null
+                action?.invoke()
+            } else {
+                pinMode = PinMode.SetNew
+                pinMessage = "The PINs did not match, start again"
+                resetPinDigits()
+            }
+            null -> Unit
+        }
+    }
+
+    fun pinKey(e: AndroidKey): Boolean {
+        val down = e.action == AndroidKey.ACTION_DOWN
+        val first = down && e.repeatCount == 0
+        if (e.keyCode in AndroidKey.KEYCODE_0..AndroidKey.KEYCODE_9) {
+            if (first) {
+                pinDigits[pinPos] = e.keyCode - AndroidKey.KEYCODE_0
+                if (pinPos < 3) pinPos++ else submitPin()
+            }
+            return true
+        }
+        when (e.keyCode) {
+            AndroidKey.KEYCODE_DPAD_UP -> if (down) pinDigits[pinPos] = (pinDigits[pinPos] + 1) % 10
+            AndroidKey.KEYCODE_DPAD_DOWN -> if (down) pinDigits[pinPos] = (pinDigits[pinPos] + 9) % 10
+            AndroidKey.KEYCODE_DPAD_RIGHT -> if (first && pinPos < 3) pinPos++
+            AndroidKey.KEYCODE_DPAD_LEFT -> if (first && pinPos > 0) pinPos--
+            AndroidKey.KEYCODE_DPAD_CENTER, AndroidKey.KEYCODE_ENTER, AndroidKey.KEYCODE_NUMPAD_ENTER,
+            AndroidKey.KEYCODE_BUTTON_A -> if (first) { if (pinPos < 3) pinPos++ else submitPin() }
+            AndroidKey.KEYCODE_BACK -> if (first) pinMode = null
+        }
+        return true
+    }
+
+    /** Opens an app; a locked one asks for the PIN first. */
+    fun launchApp(entry: AppEntry, r: Rect) {
+        if (DockSettings.isLocked(entry.pkg)) {
+            requirePin("This app is locked") { onLaunch(entry, r) }
+        } else {
+            onLaunch(entry, r)
+        }
+    }
+
+    /** Lock / unlock from the long-press menu. Locking the first app asks you to choose a PIN. */
+    fun toggleLock(pkg: String) {
+        when {
+            DockSettings.isLocked(pkg) ->
+                requirePin("Enter your PIN to unlock this app") { DockSettings.setLocked(pkg, false) }
+            DockSettings.pin.isBlank() ->
+                openPin(PinMode.SetNew, "Choose a PIN for locked apps") { DockSettings.setLocked(pkg, true) }
+            else -> DockSettings.setLocked(pkg, true)
+        }
+    }
 
     fun launchFocused() {
         val entry = focused ?: return
@@ -379,7 +518,7 @@ fun HomeScreen(
             val y = tileY(state.focus).dp.roundToPx()
             Rect(x, y, x + Metrics.TileW.roundToPx(), y + Metrics.TileH.roundToPx())
         }
-        onLaunch(entry, r)
+        launchApp(entry, r)
     }
 
     fun move(dx: Int, dy: Int) {
@@ -459,10 +598,12 @@ fun HomeScreen(
             Mode.Menu -> {
                 val entry = focused
                 state.mode = Mode.Browse
-                if (entry != null) when (state.menuIndex) {
-                    0 -> state.mode = Mode.Jiggle
-                    1 -> repo.hide(entry.pkg)
-                    2 -> onCommand(Command.AppInfo(entry.pkg))
+                if (entry != null) when (menuKeys.getOrNull(state.menuIndex)) {
+                    "move" -> state.mode = Mode.Jiggle
+                    "hide" -> repo.hide(entry.pkg)
+                    "info" -> onCommand(Command.AppInfo(entry.pkg))
+                    "pin" -> DockSettings.togglePinned(entry.pkg)
+                    "lock" -> toggleLock(entry.pkg)
                 }
             }
             Mode.Control -> Unit
@@ -541,7 +682,7 @@ fun HomeScreen(
                     val dm = context.resources.displayMetrics
                     val w = dm.widthPixels
                     val h = dm.heightPixels
-                    onLaunch(entry, Rect(w / 2 - w / 8, h / 2 - h / 8, w / 2 + w / 8, h / 2 + h / 8))
+                    launchApp(entry, Rect(w / 2 - w / 8, h / 2 - h / 8, w / 2 + w / 8, h / 2 + h / 8))
                 }
             }
         }
@@ -617,6 +758,13 @@ fun HomeScreen(
 
     fun onKey(event: KeyEvent): Boolean {
         val e = event.nativeKeyEvent
+        activity++
+        if (dockHidden) {
+            // The first key only brings the dock back.
+            dockHidden = false
+            return true
+        }
+        if (pinMode != null) return pinKey(e)
         if (Recents.open) return recentsKey(e)
         if (editingName) {
             // The text field and the on-screen keyboard handle the keys; Back cancels.
@@ -730,6 +878,14 @@ fun HomeScreen(
         return true
     }
 
+    // Control Center > Dock & icons > App lock: removing the PIN and every lock needs the PIN first.
+    LaunchedEffect(DockSettings.resetLocksRequested) {
+        if (DockSettings.resetLocksRequested) {
+            DockSettings.consumeResetRequest()
+            requirePin("Enter your PIN to remove all app locks") { DockSettings.clearLocks() }
+        }
+    }
+
     Box(
         Modifier
             .fillMaxSize()
@@ -811,7 +967,7 @@ fun HomeScreen(
                         // The greeting is outlined while it is selected (Up from the top buttons).
                         // The clock under it follows the style chosen in Control Center > Clock.
                         Box(Modifier.focusOutline(nameFocus)) {
-                            HomeHeader(repo.userName, Modifier, repo.clockStyle)
+                            HomeHeader(repo.userName, Modifier, repo.clockStyle, Features.clock)
                         }
                     }
                     if (Features.verse) {
@@ -872,15 +1028,20 @@ fun HomeScreen(
                     )
                 }
             }
-            if (dockAlpha > 0f) {
+            if (DockSettings.dockOn && dockAlpha > 0f) {
                 Glass(
                     backdrop,
                     Modifier
-                        .offset { IntOffset((Metrics.Margin - DockInset).roundToPx(), (topRowY - DockTop - scroll.value.dp).roundToPx()) }
-                        .size(960.dp - (Metrics.Margin - DockInset) * 2, DockHeight)
+                        .offset {
+                            IntOffset(
+                                (Metrics.RowStart - DockInset).roundToPx(),
+                                (topRowY - DockTop - scroll.value.dp).roundToPx() + (hideSlide * 240.dp.toPx()).roundToInt(),
+                            )
+                        }
+                        .size(Metrics.RowWidth + DockInset * 2, DockHeight)
                         .graphicsLayer { alpha = dockAlpha },
                     shape = RoundedCornerShape(36.dp),
-                    tint = Color.White.copy(alpha = 0.06f),
+                    tint = Color.White.copy(alpha = when (DockSettings.glass) { 0 -> 0.02f; 2 -> 0.18f; else -> 0.06f }),
                     source = ambience,
                 )
             }
@@ -899,14 +1060,22 @@ fun HomeScreen(
                         focused = i == state.focus && state.mode != Mode.Control && state.mode != Mode.Top,
                         pressed = i == state.focus && state.pressed,
                         jiggling = state.mode == Mode.Jiggle && i == state.focus,
-                        showLabel = i >= Metrics.COLS,
+                        showLabel = when (DockSettings.label) { 0 -> false; 1 -> i >= Metrics.COLS; else -> true },
+                        labelAlways = DockSettings.label == 2,
+                        locked = DockSettings.isLocked(entry.pkg),
                         nudge = state.nudge,
                         modifier = Modifier
-                            .offset { IntOffset(x.dp.roundToPx(), (baseY - scroll.value).dp.roundToPx()) }
+                            .offset {
+                                IntOffset(
+                                    x.dp.roundToPx(),
+                                    (baseY - scroll.value).dp.roundToPx() +
+                                        (if (i < Metrics.COLS) (hideSlide * 240.dp.toPx()).roundToInt() else 0),
+                                )
+                            }
                             .graphicsLayer {
                                 // Rows scrolling off the top fade out, as on tvOS.
                                 val y = baseY - scroll.value
-                                alpha = ((y + 60f) / 100f).coerceIn(0f, 1f)
+                                alpha = ((y + 60f) / 100f).coerceIn(0f, 1f) * (if (i >= Metrics.COLS) lowerRows else 1f)
                             },
                     )
                 }
@@ -924,10 +1093,11 @@ fun HomeScreen(
             if (focused != null) {
                 val tx = tileX(state.focus).value
                 val ty = tileY(state.focus)
-                val above = ty - MenuHeight.value - 14f > 16f
+                val menuHeight = 46f + 50f * menu.size
+                val above = ty - menuHeight - 14f > 16f
                 val mx = (tx + Metrics.TileW.value / 2 - MenuWidth.value / 2)
                     .coerceIn(Metrics.Margin.value, 960f - Metrics.Margin.value - MenuWidth.value)
-                val my = if (above) ty - MenuHeight.value - 14f else ty + Metrics.TileH.value + 40f
+                val my = if (above) ty - menuHeight - 14f else ty + Metrics.TileH.value + 40f
                 AnimatedVisibility(
                     state.mode == Mode.Menu, Modifier.offset(mx.dp, my.dp),
                     enter = fadeIn(tween(180)) + scaleIn(
@@ -1037,6 +1207,18 @@ fun HomeScreen(
                 repo.setName(name)
                 editingName = false
             }
+        }
+        // The PIN dialog (app lock). It is drawn above everything, Control Center included.
+        if (pinMode != null) {
+            PinDialog(
+                backdrop,
+                when (pinMode) {
+                    PinMode.SetNew -> "Set a PIN"
+                    PinMode.Confirm -> "Confirm your PIN"
+                    else -> "Enter PIN"
+                },
+                pinMessage, pinDigits, pinPos,
+            )
         }
         cc.PasswordLayer(backdrop) { focusRequester.requestFocus() }
 
