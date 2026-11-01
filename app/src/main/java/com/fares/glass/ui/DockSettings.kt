@@ -161,7 +161,7 @@ object DockSettings {
         prefs?.edit()?.putString("locked", locked.joinToString(","))?.apply()
     }
 
-    fun setPin(code: String) {
+    fun savePin(code: String) {
         pin = code
         prefs?.edit()?.putString("pin", code)?.apply()
     }
