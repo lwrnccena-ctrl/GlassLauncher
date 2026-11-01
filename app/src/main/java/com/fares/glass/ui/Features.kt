@@ -16,6 +16,9 @@ object Features {
         private set
     var weather by mutableStateOf(true)
         private set
+    /** The time and date under the greeting (the greeting itself always stays). */
+    var clock by mutableStateOf(true)
+        private set
 
     private var prefs: SharedPreferences? = null
 
@@ -28,6 +31,7 @@ object Features {
         music = p.getBoolean("music", true)
         lyrics = p.getBoolean("lyrics", true)
         weather = p.getBoolean("weather", true)
+        clock = p.getBoolean("clock", true)
     }
 
     fun toggleVerse() {
@@ -48,5 +52,10 @@ object Features {
     fun toggleWeather() {
         weather = !weather
         prefs?.edit()?.putBoolean("weather", weather)?.apply()
+    }
+
+    fun toggleClock() {
+        clock = !clock
+        prefs?.edit()?.putBoolean("clock", clock)?.apply()
     }
 }
