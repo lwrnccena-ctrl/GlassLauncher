@@ -42,6 +42,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -410,6 +412,7 @@ class ControlCenter(
     init {
         // Reads the saved verse / music / lyrics switches.
         Features.load(context)
+        DockSettings.load(context)
     }
 
     /** Brightness and volume for the two sliders. */
@@ -710,7 +713,8 @@ class ControlCenter(
         0 -> wallpaperNames.size
         1 -> 1 + packKeys.size
         2 -> ClockStyle.COUNT
-        3 -> 4
+        3 -> 5
+        5 -> 13
         else -> 1
     }
 
@@ -733,7 +737,7 @@ class ControlCenter(
     private fun movePersonal(dx: Int, dy: Int) {
         if (personalZone == 0) {
             when {
-                dy != 0 -> personalCat = (personalCat + dy).coerceIn(0, 4)
+                dy != 0 -> personalCat = (personalCat + dy).coerceIn(0, 5)
                 dx > 0 -> enterPane()
                 dx < 0 -> page = CcPage.GlassSettings
             }
@@ -761,7 +765,9 @@ class ControlCenter(
                 1 -> Features.toggleMusic()
                 2 -> Features.toggleLyrics()
                 3 -> Features.toggleWeather()
+                4 -> Features.toggleClock()
             }
+            5 -> DockSettings.cycle(paneIndex)
             else -> { sys.cycleAnimations(); tick++ }
         }
     }
@@ -1080,6 +1086,7 @@ class ControlCenter(
         WidgetItem(Icons.Rounded.MusicNote, "Music", Features.music),
         WidgetItem(Icons.Rounded.Subtitles, "Lyrics", Features.lyrics),
         WidgetItem(Icons.Rounded.WbSunny, "Weather", Features.weather),
+        WidgetItem(Icons.Rounded.AccessTime, "Clock", Features.clock),
     )
 
     private fun clockName(style: Int): String = str(
@@ -1623,13 +1630,14 @@ class ControlCenter(
     @Composable
     private fun PersonalizationPage() {
         val clear = LocalClear.current
-        val widgetsOn = listOf(Features.verse, Features.music, Features.lyrics, Features.weather).count { it }
+        val widgetsOn = listOf(Features.verse, Features.music, Features.lyrics, Features.weather, Features.clock).count { it }
         val cats = listOf(
             Triple("Wallpaper", wallpaperStatus(), Purple),
             Triple("Icon pack", iconPackLabel(iconPack), Orange),
             Triple(str(R.string.cc_clock), clockName(repo.clockStyle), WifiBlue),
-            Triple("Widgets", "$widgetsOn/4 on", Green),
+            Triple("Widgets", "$widgetsOn/5 on", Green),
             Triple(str(R.string.cc_animations), animStatus(), Orange),
+            Triple("Dock & icons", DockSettings.summary(), Purple),
         )
         Column(Modifier.fillMaxSize()) {
             BasicText("Personalization", style = txt(White, 26.sp, FontWeight.Bold).shade(clear))
@@ -1650,6 +1658,7 @@ class ControlCenter(
                         1 -> IconPackPane()
                         2 -> ClockPane()
                         3 -> WidgetsPane()
+                        5 -> DockPane()
                         else -> AnimationsPane()
                     }
                 }
@@ -1843,11 +1852,15 @@ class ControlCenter(
     private fun WidgetsPane() {
         val items = widgetItems()
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (r in 0 until 2) {
+            for (r in 0 until (items.size + 1) / 2) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     for (c in 0 until 2) {
                         val i = r * 2 + c
-                        WidgetTile(items[i], personalZone == 1 && paneIndex == i, Modifier.weight(1f))
+                        if (i < items.size) {
+                            WidgetTile(items[i], personalZone == 1 && paneIndex == i, Modifier.weight(1f))
+                        } else {
+                            Spacer(Modifier.weight(1f))
+                        }
                     }
                 }
             }
@@ -1883,6 +1896,63 @@ class ControlCenter(
                 BasicText(w.title, style = txt(fg, 15.sp, FontWeight.SemiBold), maxLines = 1)
                 BasicText(if (w.on) "On" else "Off", style = txt(fg.copy(alpha = 0.6f), 12.sp, FontWeight.Medium), maxLines = 1)
             }
+        }
+    }
+
+    // -- Dock & icons --
+
+    /** Height of a setting row plus the gap under it (the pane scrolls by this much per row). */
+    private val SettingRowPitch = 54.dp
+
+    @Composable
+    private fun DockPane() {
+        val clear = LocalClear.current
+        val density = LocalDensity.current
+        val rows = DockSettings.rows()
+        val scrollState = rememberScrollState()
+        // Keep the selected row in view: it sits about two rows from the top once the list is long enough.
+        LaunchedEffect(paneIndex, personalZone) {
+            if (personalZone == 1) {
+                val pitch = with(density) { SettingRowPitch.roundToPx() }
+                scrollState.animateScrollTo(((paneIndex - 2) * pitch).coerceAtLeast(0))
+            }
+        }
+        Column(
+            Modifier.fillMaxSize().verticalScroll(scrollState),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            rows.forEachIndexed { i, r ->
+                SettingRow(r.first, r.second, personalZone == 1 && paneIndex == i)
+            }
+            BasicText(
+                "OK changes a setting. Pin and lock apps from the long-press menu.",
+                Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+                style = txt(White.copy(alpha = 0.6f), 12.sp, FontWeight.Medium).shade(clear),
+            )
+        }
+    }
+
+    @Composable
+    private fun SettingRow(title: String, value: String, focused: Boolean) {
+        val clear = LocalClear.current
+        val f = focusAmount(focused)
+        val fg = lerp(White, Ink, f)
+        val shape = RoundedCornerShape(16.dp)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .graphicsLayer { scaleX = 1f + 0.03f * f; scaleY = 1f + 0.03f * f }
+                .background(lerp(restFill(clear, 0.08f), White.copy(alpha = 0.95f), f), shape)
+                .glassEdge(clear, f, shape)
+                .padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BasicText(
+                title, Modifier.weight(1f),
+                style = txt(fg, 14.sp, FontWeight.SemiBold), maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            BasicText(value, style = txt(fg.copy(alpha = 0.7f), 13.sp, FontWeight.Medium), maxLines = 1)
         }
     }
 
