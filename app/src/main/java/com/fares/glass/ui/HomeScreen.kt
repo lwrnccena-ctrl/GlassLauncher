@@ -456,7 +456,7 @@ fun HomeScreen(
                 resetPinDigits()
             }
             PinMode.Confirm -> if (code == pinFirst) {
-                DockSettings.setPin(code)
+                DockSettings.savePin(code)
                 val action = pinAction
                 pinMode = null
                 action?.invoke()
