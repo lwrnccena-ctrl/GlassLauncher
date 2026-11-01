@@ -1,6 +1,8 @@
 package com.fares.glass.ui
 
+import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.runtime.Composable
@@ -19,6 +21,13 @@ object GlassSpring {
 
     // Tiles: slightly tighter so the row-by-row ripple stays crisp.
     val tile = spring<Float>(dampingRatio = 0.58f, stiffness = 210f)
+
+    /** The media card spring, following Dock & icons > Motion style: off = no animation, smooth = no bounce. */
+    fun cardSpec(): AnimationSpec<Float> = when (DockSettings.anim) {
+        0 -> snap()
+        1 -> spring(dampingRatio = 1f, stiffness = 170f)
+        else -> card
+    }
 }
 
 fun lerpF(a: Float, b: Float, t: Float): Float = a + (b - a) * t
