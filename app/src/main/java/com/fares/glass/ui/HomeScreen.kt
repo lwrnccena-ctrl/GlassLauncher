@@ -174,6 +174,8 @@ fun HomeScreen(
     /** A city was chosen in the city picker (null = back to the automatic location). */
     onSetLocation: (Locator.Place?) -> Unit = {},
 ) {
+    // The living-room layout (verse column, lyrics on the TV) is not used with the 3D room.
+    val tvWallpaper = tvWallpaper && !RoomSettings.on
     // With Favorites row on, the apps pinned from the long-press menu come first, so they fill the dock.
     val apps: List<AppEntry> = if (DockSettings.favorites && DockSettings.pinned.isNotEmpty()) {
         val byPkg = repo.apps.associateBy { it.pkg }
@@ -376,6 +378,24 @@ fun HomeScreen(
         label = "island",
     )
     val islandShown by remember { derivedStateOf { islandAnim.value > 0.001f } }
+
+    // 3D room wallpaper: a still picture of the room is used for the blur.
+    var roomShot by remember { mutableStateOf<ImageBitmap?>(null) }
+    var roomFrosted by remember { mutableStateOf<ImageBitmap?>(null) }
+    var roomShotReq by remember { mutableIntStateOf(0) }
+    LaunchedEffect(RoomSettings.on, blurWanted, row) {
+        if (RoomSettings.on) roomShotReq++
+    }
+    LaunchedEffect(roomShot) {
+        val shot = roomShot ?: return@LaunchedEffect
+        roomFrosted = withContext(Dispatchers.Default) {
+            val soft = shot.asAndroidBitmap().copy(Bitmap.Config.ARGB_8888, false)
+            Blur.frosted(soft, 480, 7f, 1.1f, 1.0f).asImageBitmap()
+        }
+    }
+    val roomCols = Metrics.COLS
+    val roomFx = ((state.focus % roomCols) / (roomCols - 1).coerceAtLeast(1).toFloat()) * 2f - 1f
+    val roomFy = row.coerceIn(0, 3) * 0.4f - 0.2f
 
     // Auto-hide dock: after a few seconds without a key the dock slides away; any key brings it back.
     var dockHidden by remember { mutableStateOf(false) }
@@ -923,16 +943,39 @@ fun HomeScreen(
                 },
         ) {
             // Background: sharp at the top of the home screen, blurred and dimmed once you move into the grid.
-            Crossfade(wallpaper, animationSpec = tween(700), label = "wallpaper") { img ->
-                if (img != null) {
-                    Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low)
-                }
-            }
-            backdrop.frosted?.let {
-                Image(
-                    it, null, Modifier.fillMaxSize().graphicsLayer { alpha = blur },
-                    contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low,
+            if (RoomSettings.on) {
+                // The live 3D gamer room.
+                RoomWallpaperView(
+                    focusX = roomFx,
+                    focusY = roomFy,
+                    sky = if (raining) "RAIN" else "CLEAR",
+                    active = blur < 0.99f && !Recents.open && state.mode != Mode.Control,
+                    snapshotRequest = roomShotReq,
+                    onSnapshot = { roomShot = it },
+                    modifier = Modifier.fillMaxSize(),
                 )
+                val shot = roomShot
+                if (shot != null && blurWanted) {
+                    Image(shot, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low)
+                }
+                roomFrosted?.let {
+                    Image(
+                        it, null, Modifier.fillMaxSize().graphicsLayer { alpha = blur },
+                        contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low,
+                    )
+                }
+            } else {
+                Crossfade(wallpaper, animationSpec = tween(700), label = "wallpaper") { img ->
+                    if (img != null) {
+                        Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low)
+                    }
+                }
+                backdrop.frosted?.let {
+                    Image(
+                        it, null, Modifier.fillMaxSize().graphicsLayer { alpha = blur },
+                        contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low,
+                    )
+                }
             }
             Crossfade(ambience, animationSpec = tween(600), label = "topShelf") { img ->
                 if (img != null) {
