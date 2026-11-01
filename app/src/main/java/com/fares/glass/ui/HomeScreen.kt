@@ -346,6 +346,8 @@ fun HomeScreen(
         else -> 450
     }
     val blur by animateFloatAsState(if (inGrid) 1f else 0f, tween(blurMs), label = "blur")
+    // The lyrics are only shown on the first row (like the greeting and the clock).
+    val lyricsAlpha by animateFloatAsState(if (row == 0) 1f else 0f, tween(300), label = "lyricsAlpha")
     val dim by animateFloatAsState(
         if (state.mode == Mode.Control || state.mode == Mode.Menu) 0.3f else 0f, tween(250), label = "dim",
     )
@@ -790,11 +792,6 @@ fun HomeScreen(
             val dockAlpha by animateFloatAsState(if (row == 0) 1f else 0f, tween(300), label = "dock")
             val headerAlpha by animateFloatAsState(if (row == 0) 1f else 0f, tween(300), label = "header")
             if (headerAlpha > 0f) {
-                // Lyrics of the song that is playing, on the TV screen of the sky wallpaper.
-                if (tvWallpaper && Features.lyrics) {
-                    TvLyrics(Modifier.fillMaxSize().graphicsLayer { alpha = headerAlpha }, blurAmount = blur)
-                }
-
                 // On the sky wallpaper the left column must stay left of the TV and above the dock.
                 val tvLeft = (TvScreen.LEFT * 960f).dp
                 val columnHeight = maxOf(0.dp, topRowY - DockTop - HeaderTop - 10.dp)
@@ -940,6 +937,15 @@ fun HomeScreen(
                 it, null,
                 Modifier.fillMaxSize().graphicsLayer { alpha = frozenAlpha },
                 contentScale = ContentScale.FillBounds, filterQuality = FilterQuality.Low,
+            )
+        }
+
+        // Lyrics of the song that is playing, on the TV screen of the sky wallpaper. They are drawn outside
+        // the blurred scene (the scene is one recorded layer, which can hide them) and blur themselves.
+        if (lyricsAlpha > 0f && tvWallpaper && Features.lyrics) {
+            TvLyrics(
+                Modifier.fillMaxSize().graphicsLayer { alpha = lyricsAlpha },
+                blurAmount = maxOf(blur, recentsMix),
             )
         }
 
