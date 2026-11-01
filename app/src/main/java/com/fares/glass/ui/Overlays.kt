@@ -19,7 +19,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.OpenWith
+import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.ViewCarousel
 import androidx.compose.material.icons.rounded.Visibility
@@ -65,6 +68,29 @@ fun menuItems() = listOf(
     ControlItem(Icons.Rounded.VisibilityOff, stringResource(R.string.menu_hide), null),
     ControlItem(Icons.Rounded.Info, stringResource(R.string.menu_info), null),
 )
+
+/**
+ * The long-press menu. [keys] says which entries there are and in which order:
+ * "move", "hide", "info", "pin" (pin to / unpin from the dock) and "lock" (lock / unlock the app).
+ */
+@Composable
+fun menuItemsFor(keys: List<String>, pinned: Boolean, locked: Boolean): List<ControlItem> {
+    val move = stringResource(R.string.menu_move)
+    val hide = stringResource(R.string.menu_hide)
+    val info = stringResource(R.string.menu_info)
+    return keys.map { key ->
+        when (key) {
+            "move" -> ControlItem(Icons.Rounded.OpenWith, move, null)
+            "hide" -> ControlItem(Icons.Rounded.VisibilityOff, hide, null)
+            "info" -> ControlItem(Icons.Rounded.Info, info, null)
+            "pin" -> ControlItem(Icons.Rounded.PushPin, if (pinned) "Unpin from dock" else "Pin to dock", null)
+            else -> ControlItem(
+                if (locked) Icons.Rounded.LockOpen else Icons.Rounded.Lock,
+                if (locked) "Unlock app" else "Lock app", null,
+            )
+        }
+    }
+}
 
 /** Text style in the UI font (Inter, or the one supplied in /sdcard/Glass/fonts). */
 fun txt(color: Color, size: TextUnit, weight: FontWeight = FontWeight.Normal) =
@@ -155,9 +181,11 @@ fun rememberClock(now: Long): Pair<String, String> {
 /**
  * Home header: greeting, then the time and date in the chosen clock style
  * (see ClockStyles.kt; the style is picked in Control Center > Clock).
+ * showClock = false hides the time and date (Control Center > Personalization > Widgets > Clock);
+ * the greeting always stays.
  */
 @Composable
-fun HomeHeader(name: String, modifier: Modifier, style: Int = ClockStyle.CLASSIC) {
+fun HomeHeader(name: String, modifier: Modifier, style: Int = ClockStyle.CLASSIC, showClock: Boolean = true) {
     val now = rememberNow()
     val hour = remember(now / 60000) { java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY) }
     val plain = when (hour) {
@@ -170,7 +198,7 @@ fun HomeHeader(name: String, modifier: Modifier, style: Int = ClockStyle.CLASSIC
     val (time, date) = rememberClock(now)
     Column(modifier) {
         BasicText(greeting, style = txt(white, 17.sp, FontWeight.SemiBold).copy(shadow = headerShadow))
-        ClockBody(style, now, time, date)
+        if (showClock) ClockBody(style, now, time, date)
     }
 }
 
