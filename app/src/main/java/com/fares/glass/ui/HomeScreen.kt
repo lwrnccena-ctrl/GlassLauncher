@@ -400,6 +400,7 @@ fun HomeScreen(
                 // The weather is selected: Down goes back to the top buttons, Left to the greeting.
                 weatherFocus -> when {
                     dy > 0 -> weatherFocus = false
+                    dx > 0 -> { weatherFocus = false; state.topIndex = 0 }
                     dx < 0 -> { weatherFocus = false; nameFocus = true }
                 }
                 // The greeting is selected: Down goes back to the top buttons, Right to the weather.
@@ -411,6 +412,8 @@ fun HomeScreen(
                 dy < 0 -> nameFocus = true
                 // Down from the top buttons: the now playing card if it is showing, otherwise the apps.
                 dy > 0 -> if (cardShown) mediaFocus = 1 else state.mode = Mode.Browse
+                // Left from the Wi-Fi button: the weather pill.
+                dx < 0 && state.topIndex == 0 && weather != null && Features.weather -> weatherFocus = true
                 dx != 0 -> state.topIndex = (state.topIndex + dx).coerceIn(0, topCount - 1)
             }
             Mode.Jiggle -> HomeState.target(state.focus, dx, dy, apps.size)?.let {
@@ -810,17 +813,6 @@ fun HomeScreen(
                         Box(Modifier.focusOutline(nameFocus)) {
                             HomeHeader(repo.userName, Modifier, repo.clockStyle)
                         }
-                        if (weather != null && Features.weather) {
-                            Spacer(Modifier.width(28.dp))
-                            // The weather text is outlined while it is selected (Right from the greeting).
-                            // While the weather panel is open, the panel draws this text itself.
-                            Box(
-                                Modifier
-                                    .graphicsLayer { alpha = if (islandAnim.value > 0.001f) 0f else 1f }
-                                    .focusOutline(weatherFocus)
-                                    .onGloballyPositioned { if (!islandShown) weatherBounds = it.boundsInRoot() },
-                            ) { WeatherWidget(weather) }
-                        }
                     }
                     if (Features.verse) {
                         VerseText(
@@ -843,12 +835,31 @@ fun HomeScreen(
                 }
                 // The icon bar always stays composed, so its icons can shrink away when the Control Center
                 // opens and grow back when it closes.
-                IconBar(
-                    backdrop,
-                    if (state.mode == Mode.Top && mediaFocus < 0 && !nameFocus && !weatherFocus) state.topIndex else -1,
+                Row(
                     Modifier.align(Alignment.TopEnd).padding(top = 34.dp, end = Metrics.Margin).graphicsLayer { alpha = headerAlpha },
-                    visible = state.mode != Mode.Control,
-                )
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (weather != null && Features.weather) {
+                        // The weather pill: selected with Left from the Wi-Fi button. It fades away while the
+                        // Control Center opens, and while the weather panel is open (the panel draws it itself).
+                        WeatherPill(
+                            backdrop, weather, weatherFocus,
+                            Modifier
+                                .graphicsLayer {
+                                    alpha = (1f - ccAnim.value).coerceIn(0f, 1f) *
+                                        (if (islandAnim.value > 0.001f) 0f else 1f)
+                                }
+                                .onGloballyPositioned { if (!islandShown) weatherBounds = it.boundsInRoot() },
+                        )
+                        Spacer(Modifier.width(12.dp))
+                    }
+                    IconBar(
+                        backdrop,
+                        if (state.mode == Mode.Top && mediaFocus < 0 && !nameFocus && !weatherFocus) state.topIndex else -1,
+                        Modifier,
+                        visible = state.mode != Mode.Control,
+                    )
+                }
                 // Now playing: visible while a music app is running (playing or paused).
                 // With the sky wallpaper it sits under the verse instead (see above).
                 if (!tvWallpaper && Features.music) {
