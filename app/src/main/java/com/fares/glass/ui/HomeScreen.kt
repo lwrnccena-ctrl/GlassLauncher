@@ -840,16 +840,15 @@ fun HomeScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (weather != null && Features.weather) {
-                        // The weather pill: selected with Left from the Wi-Fi button. It fades away while the
-                        // Control Center opens, and while the weather panel is open (the panel draws it itself).
+                        // The weather pill: selected with Left from the Wi-Fi button. It shrinks away with the icons
+                        // while the Control Center opens, and hides while the weather panel is open (the panel
+                        // draws it itself).
                         WeatherPill(
                             backdrop, weather, weatherFocus,
                             Modifier
-                                .graphicsLayer {
-                                    alpha = (1f - ccAnim.value).coerceIn(0f, 1f) *
-                                        (if (islandAnim.value > 0.001f) 0f else 1f)
-                                }
+                                .graphicsLayer { alpha = if (islandAnim.value > 0.001f) 0f else 1f }
                                 .onGloballyPositioned { if (!islandShown) weatherBounds = it.boundsInRoot() },
+                            visible = state.mode != Mode.Control,
                         )
                         Spacer(Modifier.width(12.dp))
                     }
