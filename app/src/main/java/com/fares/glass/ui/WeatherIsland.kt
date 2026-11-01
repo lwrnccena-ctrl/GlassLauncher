@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
@@ -28,6 +29,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -68,7 +70,8 @@ private fun hourLabel(h: Int): String {
  * first, and the top edge starts later, so the top looks left behind and then catches up.
  * Everything is done while drawing, so the animation never recomposes the home screen.
  *
- * [progress] is 0 (closed) to 1 (open). [source] is where the small weather text sits on the screen (pixels).
+ * [progress] is 0 (closed) to 1 (open). [source] is where the weather pill sits on the screen (pixels).
+ * The panel starts exactly on the pill (same size, fully round ends).
  * [selected] is the selected day; one past the last day is the "Change location" row.
  */
 @Composable
@@ -84,13 +87,12 @@ fun WeatherIsland(
         modifier.fillMaxSize().drawWithContent {
             val p = progress()
             if (p <= 0.001f) return@drawWithContent
-            val src = source ?: Rect(size.width * 0.25f, size.height * 0.05f, size.width * 0.5f, size.height * 0.13f)
-            val padX = 16.dp.toPx()
-            val padY = 8.dp.toPx()
-            val l0 = src.left - padX
-            val t0 = src.top - padY
-            val r0 = src.right + padX
-            val b0 = src.bottom + padY
+            val src = source ?: Rect(size.width * 0.45f, size.height * 0.05f, size.width * 0.7f, size.height * 0.13f)
+            // The panel starts on the pill itself.
+            val l0 = src.left
+            val t0 = src.top
+            val r0 = src.right
+            val b0 = src.bottom
             val inset = 12.dp.toPx()
             val l1 = inset
             val t1 = inset
@@ -102,7 +104,8 @@ fun WeatherIsland(
             val b = mix(b0, b1, edge(p, 0.05f, 0.7f))
             // The top edge starts later: this is the part that looks left behind.
             val t = mix(t0, t1, edge(p, 0.3f, 0.7f))
-            val radius = mix(22.dp.toPx(), 36.dp.toPx(), p.coerceIn(0f, 1f))
+            // Fully round ends at the start (a pill), then the large rounded corners of the panel.
+            val radius = mix(src.height / 2f, 36.dp.toPx(), p.coerceIn(0f, 1f))
             val rect = RoundRect(l, t, maxOf(r, l + 1f), maxOf(b, t + 1f), CornerRadius(radius))
             val path = Path().apply { addRoundRect(rect) }
 
@@ -116,13 +119,16 @@ fun WeatherIsland(
             drawPath(path, IslandWhite.copy(alpha = mix(0.9f, 0.25f, k)), style = Stroke(1.5.dp.toPx()))
         },
     ) {
-        // The small weather text, where it sits on the home screen; it fades out as the panel opens.
+        // The weather in the pill, where it sits on the home screen; it fades out as the panel opens.
         if (source != null) {
+            val density = LocalDensity.current
             Box(
                 Modifier
                     .offset { IntOffset(source.left.roundToInt(), source.top.roundToInt()) }
+                    .size(with(density) { source.width.toDp() }, with(density) { source.height.toDp() })
                     .graphicsLayer { alpha = 1f - (progress() / 0.18f).coerceIn(0f, 1f) },
-            ) { WeatherWidget(weather) }
+                contentAlignment = Alignment.Center,
+            ) { WeatherPillBody(weather) }
         }
 
         // The weather information; it is laid out at its final place and fades in once the panel is half open.
