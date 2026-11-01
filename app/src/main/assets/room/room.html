@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Gamer Loft Room</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+:root{--bg:#05070d;--fg:#e8eaf2;color-scheme:dark}
+html,body{margin:0;height:100%;background:var(--bg);overflow:hidden}
+canvas{display:block;width:100%;height:100%}
+#ui{position:fixed;left:0;right:0;bottom:0;padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px));display:flex;gap:6px;justify-content:center;flex-wrap:wrap}
+button{font:13px system-ui,sans-serif;color:var(--fg);background:rgba(20,24,40,.55);border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:6px 14px;backdrop-filter:blur(8px);cursor:pointer}
+button.on{background:rgba(120,90,255,.75)}
+</style></head><body>
+<div id="ui"></div>
+<script src="three.min.js"></script>
+<script>if(typeof THREE==="undefined")document.body.innerHTML='<p style="color:#fff;font:16px sans-serif;padding:16px">three.min.js (r128) must sit in the same folder as room.html</p>'</script>
+<script>
+const T=THREE,PI=Math.PI,rnd=Math.random;
+const R=new T.WebGLRenderer({antialias:true});
+R.setPixelRatio(Math.min(devicePixelRatio,2));R.setSize(innerWidth,innerHeight);
+R.shadowMap.enabled=true;R.shadowMap.type=T.PCFSoftShadowMap;
+R.outputEncoding=T.sRGBEncoding;R.toneMapping=T.ACESFilmicToneMapping;R.toneMappingExposure=1.05;
+document.body.prepend(R.domElement);
+const S=new T.Scene();S.fog=new T.Fog(0x888888,30,170);
+const cam=new T.PerspectiveCamera(60,innerWidth/innerHeight,.05,400);
+const base=new T.Vector3(.55,1.5,1.85),look=new T.Vector3(-.15,1.25,-1.5);
+let mx=0,my=0,tx=0,ty=0;addEventListener('pointermove',e=>{tx=e.clientX/innerWidth-.5;ty=e.clientY/innerHeight-.5});
+addEventListener('resize',()=>{R.setSize(innerWidth,innerHeight);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()});
+
+// ---------- helpers ----------
+function ctex(w,h,f){const c=document.createElement('canvas');c.width=w;c.height=h;f(c.getContext('2d'),w,h);const t=new T.CanvasTexture(c);t.encoding=T.sRGBEncoding;t.anisotropy=8;t.c=c;return t}
+const M=(c,r=.6,m=0,o={})=>new T.MeshStandardMaterial(Object.assign({color:c,roughness:r,metalness:m,shadowSide:T.DoubleSide},o));
+const E=(c,i=1.5)=>new T.MeshStandardMaterial({color:0,emissive:c,emissiveIntensity:i,roughness:.4});
+// rounded box: every edge and corner is bevelled, nothing is pointy
+function rr(w,h,d,r){const b=Math.min(r*.7,w*.45,h*.45,d*.45),iw=w-2*b,ih=h-2*b,x=iw/2,y=ih/2,q=Math.max(Math.min(r-b,x-.0005,y-.0005),.0005);
+const s=new T.Shape();s.moveTo(-x+q,-y);s.lineTo(x-q,-y);s.absarc(x-q,-y+q,q,-PI/2,0);s.lineTo(x,y-q);s.absarc(x-q,y-q,q,0,PI/2);s.lineTo(-x+q,y);s.absarc(-x+q,y-q,q,PI/2,PI);s.lineTo(-x,-y+q);s.absarc(-x+q,-y+q,q,PI,1.5*PI);
+const dp=Math.max(d-2*b,.0005),g=new T.ExtrudeGeometry(s,{depth:dp,bevelEnabled:true,bevelThickness:b,bevelSize:b,bevelSegments:5,curveSegments:10});g.translate(0,0,-dp/2);return g}
+function B(w,h,d,r,m,x,y,z,p){const o=new T.Mesh(rr(w,h,d,r),m);o.position.set(x,y,z);o.castShadow=o.receiveShadow=true;(p||S).add(o);return o}
+function P(w,h,m,x,y,z,ry,rx){const o=new T.Mesh(new T.PlaneGeometry(w,h),m);o.position.set(x,y,z);o.rotation.set(rx||0,ry||0,0);o.receiveShadow=o.castShadow=true;S.add(o);return o}
+function Bl(g,m,x,y,z,p){const o=new T.Mesh(g,m);o.position.set(x,y,z);o.castShadow=o.receiveShadow=true;(p||S).add(o);return o}
+
+// ---------- room shell ----------
+const wood=ctex(512,512,(c,w)=>{for(let i=0;i<8;i++){const y=i*64;c.fillStyle=`hsl(26,34%,${21+rnd()*9}%)`;c.fillRect(0,y,w,64);for(let k=0;k<70;k++){c.strokeStyle=`rgba(30,14,6,${rnd()*.2})`;c.beginPath();const yy=y+rnd()*64;c.moveTo(0,yy);c.bezierCurveTo(w*.3,yy+rnd()*4-2,w*.6,yy+rnd()*4-2,w,yy);c.stroke()}c.fillStyle='rgba(0,0,0,.6)';c.fillRect(0,y,w,2);c.fillRect(rnd()*w,y,2,64)}});
+wood.wrapS=wood.wrapT=T.RepeatWrapping;wood.repeat.set(2.6,2.5);
+P(4.2,4,M(0xffffff,.42,0,{map:wood}),0,0,0,0,-PI/2);
+const wallM=M(0x2a2d44,.92),accM=M(0x33375a,.92);
+P(4.2,2.8,accM,0,1.4,-2,0);P(4.2,2.8,wallM,2.1,1.4,0,-PI/2);P(4.2,2.8,wallM,0,1.4,2,PI);P(4.2,4,M(0x20222e,1),0,2.8,0,0,PI/2);
+// left wall with window opening (z -1.3..0.5, y 0.9..2.3)
+{const s=new T.Shape();s.moveTo(-2,0);s.lineTo(2,0);s.lineTo(2,2.8);s.lineTo(-2,2.8);s.closePath();
+const h=new T.Path();h.moveTo(-.5,.9);h.lineTo(1.3,.9);h.lineTo(1.3,2.3);h.lineTo(-.5,2.3);h.closePath();s.holes.push(h);
+const g=new T.ShapeGeometry(s);g.rotateY(PI/2);Bl(g,wallM,-2.1,0,0)}
+const wf=M(0xeeeeF4,.4);
+B(.1,.07,1.9,.03,wf,-2.07,2.335,-.4);B(.22,.05,2.0,.02,wf,-2.0,.875,-.4);
+B(.1,1.5,.07,.03,wf,-2.07,1.6,-1.335);B(.1,1.5,.07,.03,wf,-2.07,1.6,.535);
+B(.06,1.4,.04,.018,wf,-2.07,1.6,-.4);B(.06,.04,1.8,.018,wf,-2.07,1.6,-.4);
+{const g=new T.PlaneGeometry(1.8,1.4);g.rotateY(PI/2);const o=new T.Mesh(g,new T.MeshStandardMaterial({color:0xcfe6ff,transparent:true,opacity:.1,roughness:.05,depthWrite:false}));o.position.set(-2.09,1.6,-.4);S.add(o)}
+
+// ---------- outside: sky, city, clouds, stars, weather ----------
+const skyC=document.createElement('canvas');skyC.width=4;skyC.height=512;const skyT=new T.CanvasTexture(skyC);skyT.encoding=T.sRGBEncoding;
+const skyM=new T.MeshBasicMaterial({map:skyT,side:T.BackSide,fog:false});
+const sky=new T.Mesh(new T.SphereGeometry(150,32,24),skyM);sky.position.set(-2.1,1.5,0);S.add(sky);
+const ground=new T.Mesh(new T.PlaneGeometry(600,600),M(0x151820,1));ground.rotation.x=-PI/2;ground.position.y=-7;S.add(ground);
+const winT=ctex(128,128,(c,w,h)=>{c.fillStyle='#000';c.fillRect(0,0,w,h);for(let i=0;i<8;i++)for(let j=0;j<8;j++)if(rnd()<.45){c.fillStyle=rnd()<.8?'#ffd9a0':'#bfe3ff';c.fillRect(i*16+3,j*16+4,10,8)}});
+winT.wrapS=winT.wrapT=T.RepeatWrapping;
+const bm=[];
+for(let i=0;i<30;i++){const w=6+rnd()*9,h=14+rnd()*30,d=6+rnd()*9;const t=winT.clone();t.needsUpdate=true;t.repeat.set(Math.round(w/4),Math.round(h/5));
+const m=new T.MeshStandardMaterial({color:0x1a1d28,roughness:.9,emissive:0xffffff,emissiveMap:t,emissiveIntensity:0});bm.push(m);
+const o=new T.Mesh(new T.BoxGeometry(w,h,d),m);o.position.set(-32-rnd()*70,-7+h/2,-95+rnd()*190);S.add(o)}
+const sunS=new T.Sprite(new T.SpriteMaterial({map:ctex(128,128,(c)=>{const g=c.createRadialGradient(64,64,0,64,64,64);g.addColorStop(0,'rgba(255,255,255,1)');g.addColorStop(.25,'rgba(255,255,255,.9)');g.addColorStop(1,'rgba(255,255,255,0)');c.fillStyle=g;c.fillRect(0,0,128,128)}),blending:T.AdditiveBlending,depthWrite:false,fog:false,transparent:true}));S.add(sunS);
+const stars=new T.Points((()=>{const g=new T.BufferGeometry(),a=[];for(let i=0;i<500;i++){const u=rnd()*2*PI,v=rnd()*1.2+.05;a.push(-2.1+Math.cos(u)*140*Math.cos(v*.9),1.5+Math.sin(v)*135,Math.sin(u)*140*Math.cos(v*.9))}g.setAttribute('position',new T.Float32BufferAttribute(a,3));return g})(),new T.PointsMaterial({color:0xffffff,size:1.4,sizeAttenuation:false,transparent:true,fog:false,depthWrite:false}));S.add(stars);
+const cloudT=ctex(256,128,c=>{for(let i=0;i<14;i++){const x=40+rnd()*176,y=50+rnd()*30,r=22+rnd()*26,g=c.createRadialGradient(x,y,0,x,y,r);g.addColorStop(0,'rgba(255,255,255,.55)');g.addColorStop(1,'rgba(255,255,255,0)');c.fillStyle=g;c.fillRect(0,0,256,128)}});
+const clouds=[];for(let i=0;i<18;i++){const s=new T.Sprite(new T.SpriteMaterial({map:cloudT,fog:false,transparent:true,depthWrite:false}));s.scale.set(70+rnd()*60,28+rnd()*14,1);s.position.set(-85-rnd()*40,5+rnd()*20,-110+rnd()*200);S.add(s);clouds.push(s)}
+const dotT=ctex(32,32,c=>{const g=c.createRadialGradient(16,16,0,16,16,16);g.addColorStop(0,'#fff');g.addColorStop(1,'rgba(255,255,255,0)');c.fillStyle=g;c.fillRect(0,0,32,32)});
+const RN=1400,rp=new Float32Array(RN*6);for(let i=0;i<RN;i++){const x=-2.5-rnd()*22,y=-5+rnd()*24,z=-25+rnd()*37;rp.set([x,y,z,x+.1,y+.7,z],i*6)}
+const rainG=new T.BufferGeometry();rainG.setAttribute('position',new T.BufferAttribute(rp,3));
+const rain=new T.LineSegments(rainG,new T.LineBasicMaterial({color:0xaec4dd,transparent:true,opacity:.5,fog:false}));rain.frustumCulled=false;S.add(rain);
+const SN=1500,sp=new Float32Array(SN*3);for(let i=0;i<SN;i++)sp.set([-2.5-rnd()*22,-5+rnd()*24,-25+rnd()*37],i*3);
+const snowG=new T.BufferGeometry();snowG.setAttribute('position',new T.BufferAttribute(sp,3));
+const snow=new T.Points(snowG,new T.PointsMaterial({map:dotT,size:.22,transparent:true,depthWrite:false,fog:false}));snow.frustumCulled=false;S.add(snow);
+
+// ---------- lights ----------
+const hemi=new T.HemisphereLight(0xffffff,0x2a2230,.8);S.add(hemi);
+S.add(new T.AmbientLight(0x6a4ca0,.22));
+const sunL=new T.DirectionalLight(0xffffff,1);sunL.castShadow=true;sunL.shadow.mapSize.set(2048,2048);
+Object.assign(sunL.shadow.camera,{left:-4.5,right:4.5,top:4.5,bottom:-4.5,near:.5,far:30});sunL.shadow.bias=-.0004;sunL.shadow.normalBias=.03;
+sunL.target.position.set(0,1.2,-.5);S.add(sunL,sunL.target);
+const pl=(c,i,x,y,z,d)=>{const l=new T.PointLight(c,i,d,2);l.position.set(x,y,z);S.add(l);return l};
+const ledL=pl(0xff2bd6,1.3,1.1,2.5,-1.8,6),ledU=pl(0x22d3ee,1.0,1.1,1.4,-1.0,5),pcL=pl(0x22d3ee,.9,1.72,1.0,-1.2,2.5),scrL=pl(0x8a7bff,.8,1.0,1.1,-1.3,2.5);
+
+// ---------- loft bed ----------
+const fr=M(0x1b1d27,.45,.6);
+for(const x of[.19,2.01])for(const z of[-1.91,-.99])B(.08,2.2,.08,.03,fr,x,1.1,z);
+B(1.9,.16,.05,.02,fr,1.1,1.56,-.99);B(1.9,.16,.05,.02,fr,1.1,1.56,-1.91);B(.05,.16,.92,.02,fr,.19,1.56,-1.45);B(.05,.16,.92,.02,fr,2.01,1.56,-1.45);
+B(1.86,.03,.92,.012,M(0x6b4a32,.7),1.1,1.6,-1.45);
+B(1.84,.2,.9,.08,M(0xdedee8,.95),1.1,1.72,-1.45);
+B(1.2,.13,.95,.07,M(0x4b2d78,.9),1.45,1.82,-1.45);
+for(const z of[-1.7,-1.25]){const p=Bl(new T.SphereGeometry(.2,28,18),M(0x8a8fb0,.95),.4,1.9,z);p.scale.set(1.1,.42,.9)}
+B(1.9,.05,.04,.02,fr,1.1,2.05,-1.91);B(1.0,.05,.04,.02,fr,1.55,2.05,-.99);B(1.0,.05,.04,.02,fr,1.55,1.85,-.99);B(.04,.05,.92,.02,fr,2.01,2.05,-1.45);
+for(const x of[.45,.75])B(.04,1.75,.04,.015,fr,x,.88,-.93);
+for(let y=.3;y<1.6;y+=.3)B(.34,.035,.035,.015,fr,.6,y,-.93);
+const ledA=E(0x22d3ee,2.2),ledB=E(0xff2bd6,2.2);
+B(1.86,.015,.02,.007,ledA,1.1,1.47,-.97);B(4.0,.02,.02,.008,ledB,0,2.7,-1.97);B(.02,.02,3.9,.008,ledB,-2.07,2.72,0);
+
+// ---------- desk setup under the bed ----------
+const dk=M(0x15161d,.5,.3),blk=M(0x0b0b10,.45,.2);
+B(1.8,.04,.7,.02,M(0x23252f,.4,.1),1.1,.74,-1.6);
+for(const x of[.3,1.9])for(const z of[-1.9,-1.3])B(.05,.72,.05,.02,dk,x,.36,z);
+let scrTex=[];
+function drawMain(c,w,h){const g=c.createLinearGradient(0,0,w,h);g.addColorStop(0,'#1a0f3c');g.addColorStop(.5,'#3a1070');g.addColorStop(1,'#0b3a6b');c.fillStyle=g;c.fillRect(0,0,w,h);c.fillStyle='rgba(255,255,255,.08)';for(let i=0;i<w;i+=32)c.fillRect(i,0,1,h);for(let j=0;j<h;j+=32)c.fillRect(0,j,w,1);
+const d=new Date();c.fillStyle='#fff';c.textAlign='center';c.font='bold 70px system-ui,sans-serif';c.fillText(d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),w/2,h/2+16);c.font='16px system-ui,sans-serif';c.fillStyle='#9ff';c.fillText(d.toDateString().toUpperCase(),w/2,h/2+46);
+c.textAlign='left';c.fillStyle='#0f8';c.fillText('FPS '+(140+Math.floor(rnd()*25)),12,26);c.fillStyle='#f4a';c.fillRect(0,h-6,w*(.3+.5*rnd()),6)}
+function drawSide(c,w,h){c.fillStyle='#0d0d1c';c.fillRect(0,0,w,h);c.fillStyle='#ff2bd6';c.font='bold 22px system-ui,sans-serif';c.fillText('LIVE CHAT',14,34);for(let y=60;y<h-10;y+=26){c.fillStyle=`hsl(${rnd()*360},80%,65%)`;c.fillRect(14,y,28+rnd()*30,10);c.fillStyle='rgba(255,255,255,.55)';c.fillRect(80,y,40+rnd()*110,10)}}
+function screen(parent,w,h,tw,th,fn,x,y,z){const t=ctex(tw,th,fn);t.draw=fn;const m=new T.MeshStandardMaterial({color:0,emissive:0xffffff,emissiveMap:t,emissiveIntensity:1.05,roughness:.3});const o=new T.Mesh(new T.PlaneGeometry(w,h),m);o.position.set(x,y,z);parent.add(o);scrTex.push(t);return o}
+// main monitor
+B(.84,.36,.035,.016,blk,1.0,1.1,-1.8);screen(S,.8,.32,512,205,drawMain,1.0,1.1,-1.7815);
+B(.05,.3,.03,.012,dk,1.0,.93,-1.84);B(.3,.015,.2,.007,dk,1.0,.7675,-1.74);
+// side monitor (portrait, angled)
+const g2=new T.Group();g2.position.set(.38,0,-1.76);g2.rotation.y=.4;S.add(g2);
+B(.34,.58,.03,.014,blk,0,1.1,0,g2);screen(g2,.31,.55,224,400,drawSide,0,1.1,.0165);B(.04,.3,.03,.012,dk,0,.92,-.04,g2);B(.22,.015,.16,.007,dk,0,.7675,.0,g2);
+// keyboard, pad, mouse
+B(.9,.006,.38,.003,M(0x101018,.95),.98,.763,-1.45);
+B(.44,.025,.14,.012,M(0x15151c,.5),.9,.7765,-1.46);
+{const k=ctex(256,80,(c,w,h)=>{c.fillStyle='#0a0a10';c.fillRect(0,0,w,h);for(let r=0;r<5;r++)for(let i=0;i<20;i++){c.fillStyle=`hsl(${(i*14+r*30)%360},90%,55%)`;c.beginPath();c.roundRect?c.roundRect(4+i*12.2,5+r*14.5,10,11,3):c.rect(4+i*12.2,5+r*14.5,10,11);c.fill()}});
+const o=new T.Mesh(new T.PlaneGeometry(.42,.12),new T.MeshBasicMaterial({map:k}));o.rotation.x=-PI/2;o.position.set(.9,.7905,-1.46);S.add(o)}
+B(.062,.028,.105,.028,M(0x15151c,.4),1.25,.78,-1.46);
+// PC tower with tempered glass window and RGB fans
+const TW=new T.Group();TW.position.set(1.72,1.0,-1.62);S.add(TW);
+B(.46,.48,.22,.025,M(0x0e0f14,.35,.5),0,0,0,TW);
+const glass=new T.Mesh(new T.PlaneGeometry(.44,.46),new T.MeshStandardMaterial({color:0x07080e,transparent:true,opacity:.3,roughness:.05,metalness:.3,depthWrite:false}));glass.position.z=.112;TW.add(glass);
+const fanM=E(0x22d3ee,2.4);
+for(const y of[-.15,0,.15]){const f=new T.Mesh(new T.TorusGeometry(.055,.009,14,40),fanM);f.position.set(-.16,y,.06);TW.add(f);Bl(new T.CylinderGeometry(.015,.015,.01,16).rotateX(PI/2),dk,-.16,y,.06,TW)}
+B(.3,.06,.12,.022,M(0x1b1d27,.3,.8),.04,-.02,.04,TW);B(.26,.012,.02,.005,fanM,.04,.012,.1,TW);
+for(let i=0;i<4;i++)B(.012,.07,.02,.005,ledB,.12+i*.02,.17,.05,TW);
+// headset resting on the tower
+const hs=new T.Group();hs.position.set(1.72,1.285,-1.6);S.add(hs);
+Bl(new T.TorusGeometry(.085,.011,12,28,PI),M(0x15151c,.5),0,0,0,hs);for(const s of[-1,1])B(.04,.09,.075,.02,M(0x15151c,.5),s*.085,0,0,hs);
+
+// ---------- gaming chair ----------
+const CH=new T.Group();CH.position.set(1.0,0,-.55);CH.rotation.y=.3;S.add(CH);
+const fab=M(0x15151a,.85),red=M(0xc0182e,.7);
+B(.5,.11,.5,.05,fab,0,.5,0,CH);for(const s of[-1,1]){B(.08,.1,.46,.04,red,s*.22,.52,0,CH);B(.07,.04,.3,.02,fab,s*.29,.74,.05,CH);B(.04,.2,.04,.015,dk,s*.27,.63,.05,CH)}
+const bk=B(.5,.82,.12,.05,fab,0,.98,.27,CH);bk.rotation.x=.1;for(const s of[-1,1])B(.07,.74,.02,.015,red,s*.16,.98,.34,CH).rotation.x=.1;
+B(.28,.16,.08,.04,red,0,1.5,.3,CH);
+Bl(new T.CylinderGeometry(.03,.03,.3,16),dk,0,.3,0,CH);
+for(let i=0;i<5;i++){const a=i*2*PI/5,pv=new T.Group();pv.rotation.y=a;CH.add(pv);B(.32,.035,.055,.02,dk,.16,.14,0,pv);Bl(new T.SphereGeometry(.03,14,10),blk,.31,.08,0,pv)}
+
+// ---------- decor ----------
+Bl(new T.SphereGeometry(.5,36,24),M(0x7a1a3a,.95),-1.45,.28,-.1).scale.set(1,.62,1);
+B(2.2,.02,1.5,.06,M(0x1d1a33,1),-.35,.012,.35);
+B(1.0,.04,.22,.015,M(0xeeeef4,.5),-1.15,1.05,-1.89);
+[0xff4466,0x22d3ee,0xffc23a].forEach((c,i)=>B(.04,.2,.14,.012,M(c,.6),-1.5+i*.05,1.17,-1.89));
+[[0xff2bd6,-.9],[0x22d3ee,-.72]].forEach(([c,x])=>{B(.07,.14,.07,.03,M(c,.5),x,1.14,-1.89);Bl(new T.SphereGeometry(.04,16,12),M(0xf2d0b0,.6),x,1.26,-1.89)});
+const pt=ctex(256,352,(c,w,h)=>{const g=c.createLinearGradient(0,0,0,h);g.addColorStop(0,'#1a0b4a');g.addColorStop(.6,'#ff2bd6');g.addColorStop(1,'#ffb347');c.fillStyle=g;c.fillRect(0,0,w,h);c.fillStyle='#ffe27a';c.beginPath();c.arc(w/2,200,70,0,2*PI);c.fill();c.fillStyle='#120625';c.fillRect(0,215,w,h);c.strokeStyle='#22d3ee';for(let i=-8;i<=8;i++){c.beginPath();c.moveTo(w/2+i*8,215);c.lineTo(w/2+i*34,h);c.stroke()}for(let y=225;y<h;y+=18+(y-225)/6){c.beginPath();c.moveTo(0,y);c.lineTo(w,y);c.stroke()}});
+B(.56,.76,.03,.015,M(0x0b0b10,.4),-1.65,1.75,-1.97);{const o=new T.Mesh(new T.PlaneGeometry(.5,.7),new T.MeshBasicMaterial({map:pt}));o.position.set(-1.65,1.75,-1.95);S.add(o)}
+{const n=ctex(512,160,(c,w,h)=>{c.textAlign='center';c.font='bold 96px system-ui,sans-serif';c.shadowColor='#ff2bd6';c.shadowBlur=30;c.strokeStyle='#ffd1f6';c.lineWidth=5;c.strokeText('LEVEL UP',w/2,115);c.fillStyle='#ff2bd6';c.fillText('LEVEL UP',w/2,115)});
+const o=new T.Mesh(new T.PlaneGeometry(.9,.28),new T.MeshBasicMaterial({map:n,transparent:true,blending:T.AdditiveBlending,depthWrite:false,toneMapped:false}));o.position.set(-.55,2.05,-1.97);S.add(o)}
+
+// ---------- sky / time / weather ----------
+const K=[[0,0x03050d,0x0b1328,.5,0x9db4ff,.35],[5,0x070b1e,0x1d2547,.35,0x9db4ff,.35],[6,0x2b3a6b,0xff8a5c,1.6,0xffa066,.5],[8,0x4a86d8,0xbcd8f2,3.2,0xfff0d8,.8],[12,0x2f78d6,0xa9d0f2,4.2,0xfff6ea,1],[16,0x3f84d6,0xbad6f0,3.6,0xfff0d0,.9],[18,0x4a5a9a,0xffa05a,2,0xff9a55,.6],[19.5,0x1a2250,0xe0603a,.6,0xff7a50,.4],[21,0x070b1e,0x1d2547,.5,0x9db4ff,.35],[24,0x03050d,0x0b1328,.5,0x9db4ff,.35]];
+const WX={clear:{sun:1,grey:0,dark:1,n:5},clouds:{sun:.45,grey:.5,dark:.85,n:14},rain:{sun:.25,grey:.75,dark:.65,n:18},snow:{sun:.4,grey:.6,dark:.9,n:18},storm:{sun:.12,grey:.85,dark:.45,n:18}};
+let weather='clear',flash=0;
+function hour(){const d=new Date();return d.getHours()+d.getMinutes()/60+d.getSeconds()/3600}
+function apply(){
+  const h=hour();let i=0;while(i<K.length-2&&h>=K[i+1][0])i++;const a=K[i],b=K[i+1],t=(h-a[0])/(b[0]-a[0]),C=x=>new T.Color(x);
+  let top=C(a[1]).lerp(C(b[1]),t),hor=C(a[2]).lerp(C(b[2]),t),sc=C(a[4]).lerp(C(b[4]),t),si=a[3]+(b[3]-a[3])*t,hi=a[5]+(b[5]-a[5])*t;
+  const W=WX[weather],lum=(top.r+top.g+top.b)/3,night=Math.min(Math.max(1-lum/.12,0),1),gr=new T.Color().setScalar(lum*1.1+.05);
+  top.lerp(gr,W.grey).multiplyScalar(W.dark);hor.lerp(gr,W.grey*.8).multiplyScalar(W.dark);
+  const g=skyC.getContext('2d').createLinearGradient(0,0,0,512),H=c=>'#'+c.getHexString();
+  g.addColorStop(0,H(top));g.addColorStop(.42,H(top.clone().lerp(hor,.75)));g.addColorStop(.5,H(hor));g.addColorStop(.52,H(hor.clone().multiplyScalar(.55)));g.addColorStop(1,H(hor.clone().multiplyScalar(.3)));
+  const cx=skyC.getContext('2d');cx.fillStyle=g;cx.fillRect(0,0,4,512);skyT.needsUpdate=true;
+  S.fog.color.copy(hor);ground.material.color.copy(hor).multiplyScalar(.25);
+  const day=h>=6&&h<18.5,pr=day?(h-6)/12.5:(((h-18.5)+24)%24)/11.5,el=Math.sin(pr*PI)*.95,hz=-(.25+pr*.85);
+  const dir=new T.Vector3(-Math.cos(el),Math.sin(el),Math.cos(el)*hz).normalize();
+  sunL.position.copy(dir).multiplyScalar(10).add(sunL.target.position);sunL.color.copy(sc);sunL.intensity=si*W.sun;
+  hemi.color.copy(hor).lerp(new T.Color(1,1,1),.35);hemi.intensity=hi*(1+.4*W.grey);
+  sunS.position.copy(dir).multiplyScalar(120).add(sky.position);sunS.material.color.copy(sc);sunS.scale.setScalar(day?26:12);sunS.material.opacity=Math.max(0,1-W.grey*1.25);
+  stars.material.opacity=night*Math.max(0,1-W.grey*1.3);
+  const cc=hor.clone().lerp(new T.Color(1,1,1),.4).multiplyScalar(1.15*Math.sqrt(W.dark));
+  clouds.forEach((s,k)=>{s.material.color.copy(cc);s.material.opacity=k<W.n?(weather==='clear'?.35:.55+.4*W.grey):0});
+  bm.forEach(m=>m.emissiveIntensity=night*1.3+.05);
+  rain.visible=weather==='rain'||weather==='storm';snow.visible=weather==='snow';
+  skyM.color.setScalar(1+flash*2.5);
+}
+function drawScreens(){scrTex.forEach(t=>{t.draw(t.c.getContext('2d'),t.c.width,t.c.height);t.needsUpdate=true})}
+const ui=document.getElementById('ui'),btns={};
+Object.keys(WX).forEach(k=>{const b=document.createElement('button');b.textContent=k[0].toUpperCase()+k.slice(1);b.onclick=()=>setW(k);ui.appendChild(b);btns[k]=b});
+function setW(k){weather=k;for(const j in btns)btns[j].classList.toggle('on',j===k);apply()}
+setW(WX[location.hash.slice(1)]?location.hash.slice(1):'clear');drawScreens();
+// ---- launcher API: ?app hides the buttons, ?lite = 30fps, no shadows (for weak TV GPUs)
+const lite=/lite/.test(location.search);
+if(/app/.test(location.search))ui.style.display='none';
+if(lite){R.setPixelRatio(1);R.shadowMap.enabled=false;sunL.castShadow=false}
+window.glass={setFocus(x,y){tx=Math.max(-1,Math.min(1,x))*.5;ty=Math.max(-1,Math.min(1,y))*.5},setWeather(k){if(WX[k])setW(k)}};
+
+// ---------- loop ----------
+let t0=performance.now(),acc=0,nextL=4;
+function loop(now){requestAnimationFrame(loop);if(lite&&now-t0<33)return;const dt=Math.min((now-t0)/1000,.05);t0=now;acc+=dt;
+  mx+=(tx-mx)*Math.min(1,dt*3);my+=(ty-my)*Math.min(1,dt*3);
+  cam.position.set(base.x+mx*.3+Math.sin(now/6000)*.04,base.y-my*.12,base.z);cam.lookAt(look.x+mx*.35,look.y-my*.1,look.z);
+  const hu=(now/12000)%1;ledA.emissive.setHSL(hu,1,.5);ledB.emissive.setHSL((hu+.5)%1,1,.5);fanM.emissive.setHSL((hu+.2)%1,1,.5);
+  ledL.color.setHSL((hu+.5)%1,1,.55);ledU.color.setHSL(hu,1,.55);pcL.color.setHSL((hu+.2)%1,1,.55);
+  if(acc>20){acc=0;apply();drawScreens()}
+  if(weather==='rain'||weather==='storm'){for(let i=0;i<RN;i++){let y=rp[i*6+1]-24*dt;if(y<-5)y+=24;rp[i*6+1]=y;rp[i*6+4]=y+.7}rainG.attributes.position.needsUpdate=true}
+  if(weather==='snow'){for(let i=0;i<SN;i++){let y=sp[i*3+1]-(1.2+(i%5)*.3)*dt;if(y<-5)y+=24;sp[i*3+1]=y;sp[i*3]+=Math.sin(now/900+i)*.01}snowG.attributes.position.needsUpdate=true}
+  if(weather==='storm'){nextL-=dt;if(nextL<0){flash=1;nextL=3+rnd()*7}}
+  if(flash>.01){flash*=Math.exp(-dt*7);skyM.color.setScalar(1+flash*2.5);hemi.intensity+=flash*.02*0;sunL.intensity=Math.max(sunL.intensity,flash*2)}else if(flash){flash=0;apply()}
+  R.render(S,cam)}
+requestAnimationFrame(loop);
+</script></body></html>
