@@ -705,7 +705,7 @@ class ControlCenter(
         wallpaperNames = List(count + 2) { i ->
             when (i) {
                 count -> "Auto (sky & weather)"
-                count + 1 -> "Gamer room (3D)"
+                count + 1 -> "Gamer room"
                 else -> runCatching { Wallpapers.name(context, i) }.getOrDefault("Wallpaper ${i + 1}")
             }
         }
