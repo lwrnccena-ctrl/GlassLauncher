@@ -33,6 +33,7 @@ import com.fares.glass.data.Weather
 import com.fares.glass.data.WeatherRepository
 import com.fares.glass.gfx.Blur
 import com.fares.glass.gfx.CustomIcons
+import com.fares.glass.gfx.DeskWallpaper
 import com.fares.glass.gfx.SkyWallpaper
 import com.fares.glass.gfx.Wallpapers
 import com.fares.glass.sys.BluetoothController
@@ -67,7 +68,8 @@ class MainActivity : ComponentActivity() {
     private val wallpaper = mutableStateOf<ImageBitmap?>(null)
     private val wallpaperName = mutableStateOf("")
     private val raining = mutableStateOf(false)
-    // True while the "Auto" sky wallpaper (the one with the TV) is selected: lyrics go on its TV screen.
+    // True while the "Auto" sky wallpaper with a TV screen is selected (lyrics go on its TV screen).
+    // The desk wallpaper has no TV screen, so this stays false.
     private val skyWallpaper = mutableStateOf(false)
     // Starts as a placeholder so the text shows "--°C" until the first real answer arrives.
     private val weatherState = mutableStateOf<Weather?>(Weather.Placeholder)
@@ -237,14 +239,15 @@ class MainActivity : ComponentActivity() {
 
     // ---- Wallpaper ----
 
-    /** The last entry in the wallpaper list is "Auto": sky by time of day, plus rain. */
+    /** The last entry in the wallpaper list is "Auto": the desk room by time of day, plus rain. */
     private fun isAutoSelected(): Boolean {
         val count = Wallpapers.count(this)
         return repo.wallpaperIndex % (count + 1) == count
     }
 
     private fun loadWallpaper() {
-        skyWallpaper.value = isAutoSelected()
+        // The desk wallpaper has no TV screen, so the lyrics stay in their normal place.
+        skyWallpaper.value = false
         if (isAutoSelected()) {
             applySky(force = true)
             return
@@ -276,7 +279,7 @@ class MainActivity : ComponentActivity() {
             shiftedNow, w?.sunrise?.plus(skew) ?: fallbackRise, w?.sunset?.plus(skew) ?: fallbackSet,
         )
         val rain = w?.isRaining == true
-        wallpaperName.value = "Auto (sky & weather)"
+        wallpaperName.value = "Desk (time & weather)"
 
         val key = "$phase-$rain"
         if (!force && key == skyKey) return
@@ -285,7 +288,7 @@ class MainActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             val (sharp, frosted) = withContext(Dispatchers.Default) {
-                val src = SkyWallpaper.render(phase, rain)
+                val src = DeskWallpaper.render(phase, rain)
                 src to Blur.frosted(src, 480, 10f, 1.45f, 1.0f)
             }
             if (!isAutoSelected()) return@launch // the user switched wallpaper meanwhile
