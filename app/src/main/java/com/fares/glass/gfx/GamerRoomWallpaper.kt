@@ -34,16 +34,64 @@ object GamerRoomWallpaper {
 
     private const val W = 1280
     private const val H = 720
+    private const val MIN = 60_000L
+    private const val DAY = 24 * 60 * MIN
     private val tz: TimeZone = TimeZone.getTimeZone("Asia/Manila")
 
-    fun render(context: Context, sky: Sky, nowMs: Long = System.currentTimeMillis()): Bitmap {
+    /** Weather code of Open-Meteo (Weather.code) to the sky of the window. */
+    fun skyFor(code: Int?, raining: Boolean): Sky = when {
+        code in 95..99 -> Sky.Storm
+        code in 51..67 || code in 80..82 -> Sky.Rain
+        code == 45 || code == 48 -> Sky.Foggy
+        code == 3 || code in 71..77 || code == 85 || code == 86 -> Sky.Cloudy
+        code == null && raining -> Sky.Rain
+        else -> Sky.Clear
+    }
+
+    /**
+     * Draws the room. [sunrise] and [sunset] are the real times of today (the same values you give to
+     * SkyWallpaper.phase); the sun and the sky follow them. Pass 0 to use the plain clock instead.
+     */
+    fun render(
+        context: Context,
+        sky: Sky,
+        nowMs: Long = System.currentTimeMillis(),
+        sunrise: Long = 0L,
+        sunset: Long = 0L,
+    ): Bitmap {
         val cal = Calendar.getInstance(tz).apply { timeInMillis = nowMs }
-        val hour = cal.get(Calendar.HOUR_OF_DAY) + cal.get(Calendar.MINUTE) / 60f
+        val clockText = "%02d:%02d".format(cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE))
         val bmp = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
         c.scale(W / 640f, H / 360f) // everything below is drawn on a 640 x 360 grid
-        Scene(context, c, hour, sky).draw()
+        Scene(context, c, lookHour(nowMs, sunrise, sunset), clockText, sky).draw()
         return bmp
+    }
+
+    private fun localMidnight(t: Long): Long {
+        val offset = tz.getOffset(t)
+        return (t + offset) / DAY * DAY - offset
+    }
+
+    private fun timeOfDay(t: Long): Long = (t + tz.getOffset(t)) % DAY
+
+    /** The hour the colours are made for: the real sunrise is always 6:00 and the real sunset 18:30. */
+    private fun lookHour(now: Long, sunrise: Long, sunset: Long): Float {
+        val cal = Calendar.getInstance(tz).apply { timeInMillis = now }
+        val clock = cal.get(Calendar.HOUR_OF_DAY) + cal.get(Calendar.MINUTE) / 60f
+        if (sunrise <= 0L || sunset <= 0L) return clock
+        val midnight = localMidnight(now)
+        val rise = midnight + timeOfDay(sunrise)
+        val set = midnight + timeOfDay(sunset)
+        if (set <= rise + 120 * MIN) return clock
+        val dayLen = (set - rise).toFloat()
+        val nightLen = DAY - dayLen
+        val h = when {
+            now < rise -> 18.5f + (now - (set - DAY)) / nightLen * 11.5f
+            now <= set -> 6f + (now - rise) / dayLen * 12.5f
+            else -> 18.5f + (now - set) / nightLen * 11.5f
+        }
+        return h % 24f
     }
 
     // ---- sky colours by hour: top, horizon, how dark the room is ----
@@ -68,7 +116,7 @@ object GamerRoomWallpaper {
         Sky.Storm -> Wx(.75f, .5f, 0f, 1f, .2f, true)
     }
 
-    private class Scene(private val context: Context, private val c: Canvas, hour: Float, sky: Sky) {
+    private class Scene(private val context: Context, private val c: Canvas, hour: Float, private val clock: String, sky: Sky) {
 
         private val clamp = Shader.TileMode.CLAMP
         private val w = wx(sky)
@@ -94,7 +142,6 @@ object GamerRoomWallpaper {
         }
         private val sx = 28f + p * 76f
         private val sy = 172f - sin(PI * p.toDouble()).toFloat() * 74f
-        private val clock = "%02d:%02d".format(hr.toInt(), ((hr - hr.toInt()) * 60f).toInt())
 
         // ---- helpers ----
         private fun rgb(v: Int): Int = v or (0xFF shl 24)
