@@ -84,6 +84,7 @@ import com.fares.glass.data.AppEntry
 import com.fares.glass.data.AppRepository
 import com.fares.glass.data.Locator
 import com.fares.glass.data.Weather
+import com.fares.glass.data.WeatherRepository
 import com.fares.glass.gfx.Blur
 import com.fares.glass.gfx.GamerRoomWallpaper
 import com.fares.glass.sys.NowPlaying
@@ -382,17 +383,22 @@ fun HomeScreen(
 
     // Gamer room wallpaper: a picture drawn for the time of day and the weather, and a blurred copy
     // of it for behind the Control Center and the grid. It is redrawn every few minutes.
-    val roomSky = if (raining) GamerRoomWallpaper.Sky.Rain else GamerRoomWallpaper.Sky.Clear
+    val realWeather = weather?.takeIf { !it.isPlaceholder }
+    val roomSky = GamerRoomWallpaper.skyFor(realWeather?.code, raining)
+    // Real sunrise and sunset of the place (or the usual Philippines times while the weather is not loaded yet).
+    val roomSun: Pair<Long, Long> = realWeather?.takeIf { it.sunrise > 0L && it.sunset > 0L }
+        ?.let { it.sunrise + WeatherRepository.skewMs(it.zone) to it.sunset + WeatherRepository.skewMs(it.zone) }
+        ?: WeatherRepository.fallbackTimes()
     var roomImage by remember { mutableStateOf<ImageBitmap?>(null) }
     var roomFrosted by remember { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(RoomSettings.on, roomSky) {
+    LaunchedEffect(RoomSettings.on, roomSky, roomSun) {
         if (!RoomSettings.on) {
             roomImage = null
             roomFrosted = null
             return@LaunchedEffect
         }
         while (true) {
-            val bmp = withContext(Dispatchers.Default) { GamerRoomWallpaper.render(context, roomSky) }
+            val bmp = withContext(Dispatchers.Default) { GamerRoomWallpaper.render(context, roomSky, System.currentTimeMillis(), roomSun.first, roomSun.second) }
             roomImage = bmp.asImageBitmap()
             roomFrosted = withContext(Dispatchers.Default) {
                 Blur.frosted(bmp.copy(Bitmap.Config.ARGB_8888, false), 480, 7f, 1.1f, 1.0f).asImageBitmap()
