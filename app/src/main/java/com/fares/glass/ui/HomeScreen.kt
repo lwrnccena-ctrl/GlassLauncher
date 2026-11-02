@@ -85,6 +85,7 @@ import com.fares.glass.data.AppRepository
 import com.fares.glass.data.Locator
 import com.fares.glass.data.Weather
 import com.fares.glass.gfx.Blur
+import com.fares.glass.gfx.GamerRoomWallpaper
 import com.fares.glass.sys.NowPlaying
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -174,7 +175,7 @@ fun HomeScreen(
     /** A city was chosen in the city picker (null = back to the automatic location). */
     onSetLocation: (Locator.Place?) -> Unit = {},
 ) {
-    // The living-room layout (verse column, lyrics on the TV) is not used with the 3D room.
+    // The living-room layout (verse column, lyrics on the TV) is not used with the gamer room.
     val tvWallpaper = tvWallpaper && !RoomSettings.on
     // With Favorites row on, the apps pinned from the long-press menu come first, so they fill the dock.
     val apps: List<AppEntry> = if (DockSettings.favorites && DockSettings.pinned.isNotEmpty()) {
@@ -379,23 +380,29 @@ fun HomeScreen(
     )
     val islandShown by remember { derivedStateOf { islandAnim.value > 0.001f } }
 
-    // 3D room wallpaper: a still picture of the room is used for the blur.
-    var roomShot by remember { mutableStateOf<ImageBitmap?>(null) }
+    // Gamer room wallpaper: a picture drawn for the time of day and the weather, and a blurred copy
+    // of it for behind the Control Center and the grid. It is redrawn every few minutes.
+    val roomSky = if (raining) GamerRoomWallpaper.Sky.Rain else GamerRoomWallpaper.Sky.Clear
+    var roomImage by remember { mutableStateOf<ImageBitmap?>(null) }
     var roomFrosted by remember { mutableStateOf<ImageBitmap?>(null) }
-    var roomShotReq by remember { mutableIntStateOf(0) }
-    LaunchedEffect(RoomSettings.on, blurWanted, row) {
-        if (RoomSettings.on) roomShotReq++
-    }
-    LaunchedEffect(roomShot) {
-        val shot = roomShot ?: return@LaunchedEffect
-        roomFrosted = withContext(Dispatchers.Default) {
-            val soft = shot.asAndroidBitmap().copy(Bitmap.Config.ARGB_8888, false)
-            Blur.frosted(soft, 480, 7f, 1.1f, 1.0f).asImageBitmap()
+    LaunchedEffect(RoomSettings.on, roomSky) {
+        if (!RoomSettings.on) {
+            roomImage = null
+            roomFrosted = null
+            return@LaunchedEffect
+        }
+        while (true) {
+            val bmp = withContext(Dispatchers.Default) { GamerRoomWallpaper.render(context, roomSky) }
+            roomImage = bmp.asImageBitmap()
+            roomFrosted = withContext(Dispatchers.Default) {
+                Blur.frosted(bmp.copy(Bitmap.Config.ARGB_8888, false), 480, 7f, 1.1f, 1.0f).asImageBitmap()
+            }
+            delay(5 * 60_000L)
         }
     }
+    // The room slides sideways with the focus: -1 on the first app of the row, +1 on the last one.
     val roomCols = Metrics.COLS
     val roomFx = ((state.focus % roomCols) / (roomCols - 1).coerceAtLeast(1).toFloat()) * 2f - 1f
-    val roomFy = row.coerceIn(0, 3) * 0.4f - 0.2f
 
     // Auto-hide dock: after a few seconds without a key the dock slides away; any key brings it back.
     var dockHidden by remember { mutableStateOf(false) }
@@ -944,25 +951,10 @@ fun HomeScreen(
         ) {
             // Background: sharp at the top of the home screen, blurred and dimmed once you move into the grid.
             if (RoomSettings.on) {
-                // The live 3D gamer room.
-                RoomWallpaperView(
-                    focusX = roomFx,
-                    focusY = roomFy,
-                    sky = if (raining) "RAIN" else "CLEAR",
-                    active = blur < 0.99f && !Recents.open && state.mode != Mode.Control,
-                    snapshotRequest = roomShotReq,
-                    onSnapshot = { roomShot = it },
-                    modifier = Modifier.fillMaxSize(),
-                )
-                val shot = roomShot
-                if (shot != null && blurWanted) {
-                    Image(shot, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low)
-                }
+                // The gamer room. It glides sideways as the focus moves along the dock.
+                GamerRoomBackground(roomImage, roomFx, Modifier.fillMaxSize())
                 roomFrosted?.let {
-                    Image(
-                        it, null, Modifier.fillMaxSize().graphicsLayer { alpha = blur },
-                        contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low,
-                    )
+                    GamerRoomBackground(it, roomFx, Modifier.fillMaxSize().graphicsLayer { alpha = blur })
                 }
             } else {
                 Crossfade(wallpaper, animationSpec = tween(700), label = "wallpaper") { img ->
@@ -982,7 +974,8 @@ fun HomeScreen(
                     Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low)
                 }
             }
-            if (raining) RainOverlay(Modifier.fillMaxSize())
+            // The gamer room already shows the rain in its window, so the full-screen rain is not drawn on top of it.
+            if (raining && !RoomSettings.on) RainOverlay(Modifier.fillMaxSize())
             Box(
                 Modifier.fillMaxSize().background(
                     Brush.verticalGradient(0f to Color.Transparent, 0.45f to Color.Black.copy(alpha = 0.05f), 1f to Color.Black.copy(alpha = 0.5f)),
