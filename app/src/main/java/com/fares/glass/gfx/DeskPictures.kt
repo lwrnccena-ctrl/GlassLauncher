@@ -34,6 +34,18 @@ class DeskPictures(val monitors: List<Bitmap?>, val frame: Bitmap?) {
             return DeskPictures(monitors, frame)
         }
 
+        /** Changes when a picture is added, replaced or removed, so the wallpaper redraws by itself. */
+        fun signature(): Long {
+            var sum = 0L
+            for (name in listOf("monitor1", "monitor2", "monitor3", "frame")) {
+                for (ext in listOf("jpg", "jpeg", "png", "webp")) {
+                    val f = File(dir, "$name.$ext")
+                    sum += f.lastModified() + f.length()
+                }
+            }
+            return sum
+        }
+
         private fun decode(name: String): Bitmap? {
             for (ext in listOf("jpg", "jpeg", "png", "webp")) {
                 val file = File(dir, "$name.$ext")
