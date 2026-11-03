@@ -1,10 +1,12 @@
 package com.fares.glass
 
+import android.Manifest
 import android.app.ActivityOptions
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.graphics.Rect
 import android.net.Uri
 import android.os.Bundle
@@ -80,7 +82,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var cc: ControlCenter
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         cc.onPermissionsResult()
+        // The desk pictures need storage access: draw the wallpaper again once the answer is in.
+        if (isAutoSelected()) applySky(force = true)
     }
+    private var askedStorage = false
 
     // Weather and location (defaults: Haligue Silangan; override with --es lat / --es lon over ADB).
     private var weather: Weather? = null
@@ -281,9 +286,16 @@ class MainActivity : ComponentActivity() {
         )
         val rain = w?.isRaining == true
         val desk = DeskSettings.on
+        // The desk pictures (Glass/desk) can only be read with storage access: ask once.
+        if (desk && !askedStorage &&
+            checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+        ) {
+            askedStorage = true
+            permissions.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE))
+        }
         wallpaperName.value = if (desk) "Desk (time & weather)" else "Auto (sky & weather)"
 
-        val key = "$phase-$rain-$desk"
+        val key = "$phase-$rain-$desk-${if (desk) DeskPictures.signature() else 0L}"
         if (!force && key == skyKey) return
         skyKey = key
         raining.value = rain
