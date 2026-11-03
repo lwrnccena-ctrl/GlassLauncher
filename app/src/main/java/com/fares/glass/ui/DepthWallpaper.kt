@@ -1,10 +1,14 @@
 package com.fares.glass.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -14,13 +18,22 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -28,7 +41,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** Your photo, filling the screen. Plain black until a photo is found in Glass/depth/. */
+/** Your photo, filling the screen. Plain dark until a photo is found in Glass/depth/. */
 @Composable
 fun DepthBackground(image: ImageBitmap?, modifier: Modifier = Modifier) {
     if (image != null) {
@@ -38,9 +51,109 @@ fun DepthBackground(image: ImageBitmap?, modifier: Modifier = Modifier) {
     }
 }
 
-/** The big clock and date. It is drawn between the photo and the foreground cutout. */
+// ---- Rounded clock digits ----
+// The digits are drawn with thick, round-ended strokes (no font file needed). Every digit lives in a
+// 60 x 100 box; the stroke is centered on the lines below.
+
+private const val GLYPH_W = 60f
+private const val GLYPH_H = 100f
+private const val COLON_W = 22f
+private const val GLYPH_GAP = 12f
+private const val GLYPH_STROKE = 14f
+
+/** A 6 (or, flipped half a turn, a 9). */
+private fun sixPath(flip: Boolean): Path {
+    fun x(v: Float) = if (flip) GLYPH_W - v else v
+    fun y(v: Float) = if (flip) GLYPH_H - v else v
+    return Path().apply {
+        moveTo(x(47f), y(16f))
+        cubicTo(x(42f), y(10f), x(36f), y(8f), x(30f), y(8f))
+        cubicTo(x(14f), y(8f), x(8f), y(28f), x(8f), y(58f))
+        addOval(if (flip) Rect(8f, 8f, 52f, 56f) else Rect(8f, 44f, 52f, 92f))
+    }
+}
+
+private val glyphs: Map<Char, Path> by lazy {
+    mapOf(
+        '0' to Path().apply { addOval(Rect(8f, 8f, 52f, 92f)) },
+        '1' to Path().apply {
+            moveTo(34f, 8f); lineTo(34f, 92f)
+            moveTo(34f, 8f); lineTo(16f, 22f)
+        },
+        '2' to Path().apply {
+            moveTo(10f, 28f)
+            cubicTo(10f, 16f, 19f, 8f, 30f, 8f)
+            cubicTo(42f, 8f, 51f, 16f, 51f, 29f)
+            cubicTo(51f, 44f, 34f, 58f, 10f, 92f)
+            lineTo(52f, 92f)
+        },
+        '3' to Path().apply {
+            moveTo(10f, 24f)
+            cubicTo(12f, 13f, 20f, 8f, 30f, 8f)
+            cubicTo(42f, 8f, 49f, 16f, 49f, 28f)
+            cubicTo(49f, 40f, 40f, 47f, 26f, 47f)
+            moveTo(26f, 47f)
+            cubicTo(42f, 47f, 52f, 55f, 52f, 69f)
+            cubicTo(52f, 84f, 42f, 92f, 30f, 92f)
+            cubicTo(18f, 92f, 11f, 86f, 9f, 75f)
+        },
+        '4' to Path().apply {
+            moveTo(40f, 92f); lineTo(40f, 8f); lineTo(6f, 66f); lineTo(54f, 66f)
+        },
+        '5' to Path().apply {
+            moveTo(48f, 8f); lineTo(17f, 8f); lineTo(13f, 47f)
+            cubicTo(19f, 42f, 26f, 40f, 32f, 40f)
+            cubicTo(44f, 40f, 52f, 50f, 52f, 66f)
+            cubicTo(52f, 82f, 42f, 92f, 29f, 92f)
+            cubicTo(18f, 92f, 11f, 86f, 9f, 76f)
+        },
+        '6' to sixPath(false),
+        '7' to Path().apply {
+            moveTo(8f, 8f); lineTo(52f, 8f); lineTo(22f, 92f)
+        },
+        '8' to Path().apply {
+            addOval(Rect(11f, 8f, 49f, 50f))
+            addOval(Rect(9f, 46f, 51f, 92f))
+        },
+        '9' to sixPath(true),
+    )
+}
+
+/** Draws [text] (digits and ':') with the rounded strokes, [height] tall. */
 @Composable
-fun DepthClock(modifier: Modifier = Modifier) {
+private fun RoundedClockText(text: String, height: Dp, color: Color, modifier: Modifier = Modifier) {
+    val widthUnits = text.fold(0f) { sum, c -> sum + if (c == ':') COLON_W else GLYPH_W } +
+        GLYPH_GAP * (text.length - 1).coerceAtLeast(0)
+    Canvas(modifier.size(height * (widthUnits / GLYPH_H), height)) {
+        val s = size.height / GLYPH_H
+        var x = 0f
+        text.forEach { c ->
+            if (c == ':') {
+                val r = GLYPH_STROKE / 2f * 1.1f * s
+                drawCircle(color, r, Offset((x + COLON_W / 2f) * s, 36f * s))
+                drawCircle(color, r, Offset((x + COLON_W / 2f) * s, 68f * s))
+                x += COLON_W + GLYPH_GAP
+            } else {
+                glyphs[c]?.let { path ->
+                    withTransform({
+                        translate(x * s, 0f)
+                        scale(s, s, Offset.Zero)
+                    }) {
+                        drawPath(path, color, style = Stroke(GLYPH_STROKE, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                    }
+                }
+                x += GLYPH_W + GLYPH_GAP
+            }
+        }
+    }
+}
+
+/**
+ * The date, the big rounded clock and (when given) the weather under it. It is drawn between the
+ * photo and the foreground cutout, so the cutout can cover them.
+ */
+@Composable
+fun DepthClock(modifier: Modifier = Modifier, weather: (@Composable () -> Unit)? = null) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -50,17 +163,21 @@ fun DepthClock(modifier: Modifier = Modifier) {
     }
     val time = remember(now / 60_000L) { SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(now)) }
     val date = remember(now / 3_600_000L) { SimpleDateFormat("EEEE, d MMMM", Locale.getDefault()).format(Date(now)) }
-    val ink = Color(0xFFCFE3E8)
+    val ink = Color(0xFFF2F6F7)
     Box(modifier, contentAlignment = Alignment.TopCenter) {
-        Column(Modifier.padding(top = 56.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(Modifier.padding(top = 48.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             BasicText(
                 date,
-                style = TextStyle(color = ink.copy(alpha = 0.9f), fontSize = 22.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center),
+                style = TextStyle(
+                    color = ink.copy(alpha = 0.85f), fontSize = 22.sp, fontWeight = FontWeight.SemiBold,
+                    fontFamily = FontFamily.SansSerif, textAlign = TextAlign.Center,
+                ),
             )
-            BasicText(
-                time,
-                style = TextStyle(color = ink, fontSize = 168.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center),
-            )
+            Spacer(Modifier.height(6.dp))
+            RoundedClockText(time, 150.dp, ink)
+            if (weather != null) {
+                Box(Modifier.padding(top = 10.dp)) { weather() }
+            }
         }
     }
 }
