@@ -86,6 +86,8 @@ import com.fares.glass.data.Locator
 import com.fares.glass.data.Weather
 import com.fares.glass.data.WeatherRepository
 import com.fares.glass.gfx.Blur
+import com.fares.glass.gfx.DepthPictures
+import com.fares.glass.gfx.DepthSettings
 import com.fares.glass.gfx.GamerRoomWallpaper
 import com.fares.glass.sys.NowPlaying
 import kotlinx.coroutines.Dispatchers
@@ -176,8 +178,8 @@ fun HomeScreen(
     /** A city was chosen in the city picker (null = back to the automatic location). */
     onSetLocation: (Locator.Place?) -> Unit = {},
 ) {
-    // The living-room layout (verse column, lyrics on the TV) is not used with the gamer room.
-    val tvWallpaper = tvWallpaper && !RoomSettings.on
+    // The living-room layout (verse column, lyrics on the TV) is not used with the gamer room or the depth wallpaper.
+    val tvWallpaper = tvWallpaper && !RoomSettings.on && !DepthSettings.on
     // With Favorites row on, the apps pinned from the long-press menu come first, so they fill the dock.
     val apps: List<AppEntry> = if (DockSettings.favorites && DockSettings.pinned.isNotEmpty()) {
         val byPkg = repo.apps.associateBy { it.pkg }
@@ -365,6 +367,8 @@ fun HomeScreen(
     val blur by animateFloatAsState(if (inGrid) 1f else 0f, tween(blurMs), label = "blur")
     // The lyrics are only shown on the first row (like the greeting and the clock).
     val lyricsAlpha by animateFloatAsState(if (row == 0) 1f else 0f, tween(300), label = "lyricsAlpha")
+    // The big clock of the depth wallpaper is only shown on the first row too.
+    val depthClockAlpha by animateFloatAsState(if (row == 0) 1f else 0f, tween(300), label = "depthClock")
     // The rows under the dock stay hidden until you move down (matters when the dock is raised).
     val lowerRows by animateFloatAsState(if (row == 0) 0f else 1f, tween(250), label = "lowerRows")
     val dim by animateFloatAsState(
@@ -409,6 +413,32 @@ fun HomeScreen(
     // The room slides sideways with the focus: -1 on the first app of the row, +1 on the last one.
     val roomCols = Metrics.COLS
     val roomFx = ((state.focus % roomCols) / (roomCols - 1).coerceAtLeast(1).toFloat()) * 2f - 1f
+
+    // Depth wallpaper: your own photo (Glass/depth/background.jpg) with the clock behind the foreground
+    // cutout (Glass/depth/foreground.png). A blurred copy of the photo is used for the grid and the glass tiles.
+    var depthBack by remember { mutableStateOf<ImageBitmap?>(null) }
+    var depthFront by remember { mutableStateOf<ImageBitmap?>(null) }
+    var depthFrosted by remember { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(DepthSettings.on, DepthSettings.reload) {
+        if (!DepthSettings.on) {
+            depthBack = null
+            depthFront = null
+            depthFrosted = null
+            return@LaunchedEffect
+        }
+        val pics = withContext(Dispatchers.Default) { DepthPictures.load(context) }
+        depthBack = pics.background?.asImageBitmap()
+        depthFront = pics.foreground?.asImageBitmap()
+        depthFrosted = pics.background?.let { bmp ->
+            withContext(Dispatchers.Default) {
+                Blur.frosted(bmp.copy(Bitmap.Config.ARGB_8888, false), 480, 7f, 1.1f, 1.0f).asImageBitmap()
+            }
+        }
+    }
+    // The glass tiles blur the depth photo too (MainActivity puts the normal wallpaper there whenever it changes).
+    LaunchedEffect(DepthSettings.on, depthFrosted, wallpaper) {
+        if (DepthSettings.on && !RoomSettings.on) depthFrosted?.let { backdrop.frosted = it }
+    }
 
     // Auto-hide dock: after a few seconds without a key the dock slides away; any key brings it back.
     var dockHidden by remember { mutableStateOf(false) }
@@ -580,8 +610,8 @@ fun HomeScreen(
                     dy > 0 -> nameFocus = false
                     dx > 0 && weather != null && Features.weather -> { nameFocus = false; weatherFocus = true }
                 }
-                // Up from the top buttons: the greeting (and its name).
-                dy < 0 -> nameFocus = true
+                // Up from the top buttons: the greeting (and its name). The depth wallpaper has no greeting.
+                dy < 0 -> if (!DepthSettings.on) nameFocus = true
                 // Down from the top buttons: the now playing card if it is showing, otherwise the apps.
                 dy > 0 -> if (cardShown) mediaFocus = 1 else state.mode = Mode.Browse
                 // Left from the Wi-Fi button: the weather pill.
@@ -956,7 +986,23 @@ fun HomeScreen(
                 },
         ) {
             // Background: sharp at the top of the home screen, blurred and dimmed once you move into the grid.
-            if (RoomSettings.on) {
+            if (DepthSettings.on && !RoomSettings.on) {
+                // The depth wallpaper: your photo, then the big clock, then the foreground cutout on top of the clock.
+                DepthBackground(depthBack, Modifier.fillMaxSize())
+                depthFrosted?.let {
+                    Image(
+                        it, null, Modifier.fillMaxSize().graphicsLayer { alpha = blur },
+                        contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low,
+                    )
+                }
+                DepthClock(Modifier.fillMaxSize().graphicsLayer { alpha = depthClockAlpha })
+                depthFront?.let {
+                    Image(
+                        it, null, Modifier.fillMaxSize().graphicsLayer { alpha = 1f - blur },
+                        contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low,
+                    )
+                }
+            } else if (RoomSettings.on) {
                 // The gamer room. It glides sideways as the focus moves along the dock.
                 GamerRoomBackground(roomImage, roomFx, Modifier.fillMaxSize())
                 roomFrosted?.let {
@@ -999,35 +1045,38 @@ fun HomeScreen(
 
                 // Header (greeting, clock, date) with the weather text right next to it,
                 // the verse of the moment under the date, and (sky wallpaper) the now playing card under the verse.
-                Column(
-                    Modifier
-                        .padding(start = Metrics.Margin, top = HeaderTop)
-                        .then(if (tvWallpaper) Modifier.height(columnHeight) else Modifier)
-                        .graphicsLayer { alpha = headerAlpha },
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        // The greeting is outlined while it is selected (Up from the top buttons).
-                        // The clock under it follows the style chosen in Control Center > Clock.
-                        Box(Modifier.focusOutline(nameFocus)) {
-                            HomeHeader(repo.userName, Modifier, repo.clockStyle, Features.clock)
+                // The depth wallpaper is the simple mode: it has its own big clock instead.
+                if (!DepthSettings.on) {
+                    Column(
+                        Modifier
+                            .padding(start = Metrics.Margin, top = HeaderTop)
+                            .then(if (tvWallpaper) Modifier.height(columnHeight) else Modifier)
+                            .graphicsLayer { alpha = headerAlpha },
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            // The greeting is outlined while it is selected (Up from the top buttons).
+                            // The clock under it follows the style chosen in Control Center > Clock.
+                            Box(Modifier.focusOutline(nameFocus)) {
+                                HomeHeader(repo.userName, Modifier, repo.clockStyle, Features.clock)
+                            }
                         }
-                    }
-                    if (Features.verse) {
-                        VerseText(
-                            backdrop, Modifier.padding(top = 8.dp),
-                            maxWidth = if (tvWallpaper) maxOf(160.dp, tvLeft - Metrics.Margin - 14.dp) else 420.dp,
-                        )
-                    }
-                    if (tvWallpaper && Features.music) {
-                        // The card stays in the layout while the Control Center is open (just invisible),
-                        // because the flying copy of it takes over from here and lands back here.
-                        FitScale(Modifier.weight(1f).padding(top = 10.dp)) {
-                            NowPlayingCard(
-                                backdrop, mediaFocus,
-                                Modifier
-                                    .graphicsLayer { alpha = if (mediaShown) 0f else 1f }
-                                    .onGloballyPositioned { if (!mediaShown) cardBounds = it.boundsInRoot() },
+                        if (Features.verse) {
+                            VerseText(
+                                backdrop, Modifier.padding(top = 8.dp),
+                                maxWidth = if (tvWallpaper) maxOf(160.dp, tvLeft - Metrics.Margin - 14.dp) else 420.dp,
                             )
+                        }
+                        if (tvWallpaper && Features.music) {
+                            // The card stays in the layout while the Control Center is open (just invisible),
+                            // because the flying copy of it takes over from here and lands back here.
+                            FitScale(Modifier.weight(1f).padding(top = 10.dp)) {
+                                NowPlayingCard(
+                                    backdrop, mediaFocus,
+                                    Modifier
+                                        .graphicsLayer { alpha = if (mediaShown) 0f else 1f }
+                                        .onGloballyPositioned { if (!mediaShown) cardBounds = it.boundsInRoot() },
+                                )
+                            }
                         }
                     }
                 }
