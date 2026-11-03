@@ -670,14 +670,34 @@ object DeskWallpaper {
 
         private fun leftWall() {
             val p = poly(0, 0, bx0, by0, bx0, by1, 0, h)
-            dp(p, LG(0, 0, bx0, 0, t(rgb(0xF0EBE3)), t(rgb(0xC9C2B8))))
+            // black wall, a little lighter near the window so its shape still reads
+            dp(p, LG(0, 0, bx0, 0, t(rgb(0x1A1B20)), t(rgb(0x0A0B0E))))
             c.save()
             c.clipPath(p)
-            val seam = S(al(rgb(0), 0.06), 1.4)
-            for (z in listOf(0.25, 0.50, 0.75)) line(rx(0, z), ry(3, z), rx(0, z), ry(0, z), seam)
+            // slat panel (PVC wood look): every other slat a touch lighter, a dark groove and a thin highlight between them
+            val slats = 40
+            val lighter = F(al(rgb(0xFFFFFF), 0.04))
+            for (i in 0 until slats step 2) {
+                val za = i / slats.toDouble()
+                val zb = (i + 1) / slats.toDouble()
+                dp(room(0, 3, za, 0, 3, zb, 0, 0, zb, 0, 0, za), lighter)
+            }
+            val groove = S(al(rgb(0), 0.85), 2)
+            val shine = S(al(rgb(0xFFFFFF), 0.08), 1)
+            for (i in 0..slats) {
+                val z = i / slats.toDouble()
+                line(rx(0, z), ry(3, z), rx(0, z), ry(0, z), groove)
+                line(rx(0, z) + 2, ry(3, z), rx(0, z) + 2, ry(0, z), shine)
+            }
             rect(0, 0, bx0, h * 0.30, LG(0, 0, 0, h * 0.30, al(ledCol, 0.30 * ledK), al(ledCol, 0)))
             c.restore()
-            dp(room(0, 0.08, 0, 0, 0.08, 1, 0, 0, 1, 0, 0, 0), F(t(rgb(0xA39D94))))
+            // dark skirting, and thin light lines on the corners so the shape of the room stays clear
+            dp(room(0, 0.08, 0, 0, 0.08, 1, 0, 0, 1, 0, 0, 0), F(t(rgb(0x24262C))))
+            val rim = S(al(rgb(0xFFFFFF), 0.30), 1.6)
+            line(0, 0, bx0, by0, rim) // wall and ceiling
+            line(bx0, by0, bx0, by1, rim) // wall and back corner
+            line(rx(0, 0), ry(0.08, 0), rx(0, 1), ry(0.08, 1), S(al(rgb(0xFFFFFF), 0.20), 1.2)) // top of the skirting
+            line(0, h, bx0, by1, S(al(rgb(0xFFFFFF), 0.22), 1.4)) // wall and floor
         }
 
         private fun ledRoom(x1: Double, z1: Double, x2: Double, z2: Double) {
@@ -686,9 +706,23 @@ object DeskWallpaper {
 
         private fun ceiling() {
             val p = poly(0, 0, w, 0, bx1, by0, bx0, by0)
-            dp(p, LG(0, 0, 0, by0, t(rgb(0xD9D3C9)), t(rgb(0xF2EEE6))))
+            dp(p, LG(0, 0, 0, by0, t(rgb(0x15161B)), t(rgb(0x0C0D10))))
             c.save()
             c.clipPath(p)
+            // slats running from the front to the back of the room
+            val slats = 40
+            val step = 5.4 / slats
+            val lighter = F(al(rgb(0xFFFFFF), 0.04))
+            for (i in 0 until slats step 2) {
+                dp(room(i * step, 3, 0, (i + 1) * step, 3, 0, (i + 1) * step, 3, 1, i * step, 3, 1), lighter)
+            }
+            val groove = S(al(rgb(0), 0.85), 2)
+            val shine = S(al(rgb(0xFFFFFF), 0.07), 1)
+            for (i in 0..slats) {
+                val x = i * step
+                line(rx(x, 0), ry(3, 0), rx(x, 1), ry(3, 1), groove)
+                line(rx(x, 0) + 2, ry(3, 0), rx(x, 1) + 2, ry(3, 1), shine)
+            }
             dp(room(0.45, 3, 0.12, 4.2, 3, 0.12, 4.2, 3, 0.80, 0.45, 3, 0.80), F(al(rgb(0xFFE6C0), 0.22)))
             ledRoom(0.45, 0.12, 4.2, 0.12); ledRoom(4.2, 0.12, 4.2, 0.80)
             ledRoom(4.2, 0.80, 0.45, 0.80); ledRoom(0.45, 0.80, 0.45, 0.12)
@@ -700,6 +734,10 @@ object DeskWallpaper {
                 oval(cx - 9, cy - 3.5, cx + 9, cy + 3.5, F(rgb(0xFFF3DC)))
             }
             c.restore()
+            // thin light lines on the ceiling's corners
+            val rim = S(al(rgb(0xFFFFFF), 0.30), 1.6)
+            line(bx0, by0, bx1, by0, rim)
+            line(w, 0, bx1, by0, rim)
         }
 
         // ---------------------------------------------------------------- pictures
