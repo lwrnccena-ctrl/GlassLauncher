@@ -16,6 +16,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RadialGradient
@@ -36,9 +37,9 @@ object DeskWallpaper {
     const val WIDTH = 1280
     const val HEIGHT = 720
 
-    fun render(phase: Phase, weather: Weather): Bitmap {
+    fun render(phase: Phase, weather: Weather, pics: DeskPictures? = null): Bitmap {
         val bmp = Bitmap.createBitmap(WIDTH, HEIGHT, Bitmap.Config.ARGB_8888)
-        Scene(bmp, phase, weather).draw()
+        Scene(bmp, phase, weather, pics).draw()
         return bmp
     }
 
@@ -46,17 +47,22 @@ object DeskWallpaper {
      * Drop-in for SkyWallpaper.render(phase, rain): same inputs, so the existing
      * time (SkyWallpaper.phase) and rain logic keeps working unchanged.
      */
-    fun render(phase: SkyWallpaper.Phase, rain: Boolean): Bitmap {
+    fun render(phase: SkyWallpaper.Phase, rain: Boolean, pics: DeskPictures? = null): Bitmap {
         val p = when (phase) {
             SkyWallpaper.Phase.Sunrise -> Phase.Sunrise
             SkyWallpaper.Phase.Day -> Phase.Day
             SkyWallpaper.Phase.Sunset -> Phase.Sunset
             SkyWallpaper.Phase.Night -> Phase.Night
         }
-        return render(p, if (rain) Weather.Rain else Weather.Sunny)
+        return render(p, if (rain) Weather.Rain else Weather.Sunny, pics)
     }
 
-    private class Scene(bitmap: Bitmap, private val phase: Phase, private val weather: Weather) {
+    private class Scene(
+        bitmap: Bitmap,
+        private val phase: Phase,
+        private val weather: Weather,
+        private val pics: DeskPictures?,
+    ) {
 
         // A "paint spec": either a fill (color or gradient) or a round-capped stroke.
         private class Pt(val color: Int, val shader: Shader?, val stroke: Boolean, val width: Float)
@@ -118,7 +124,7 @@ object DeskWallpaper {
         fun draw() {
             windowSky(); glass(); floor()
             reflect(0.66, 3.5, false); reflect(0.20, 1.75, true)
-            leftWall(); ceiling(); shelves(); deskBody(); monitors(); deskItems(); chairs()
+            leftWall(); pictureFrame(); ceiling(); shelves(); deskBody(); monitors(); deskItems(); chairs()
             spill(); particles(); vignette()
         }
 
@@ -696,6 +702,71 @@ object DeskWallpaper {
             c.restore()
         }
 
+        // ---------------------------------------------------------------- pictures
+
+        /**
+         * Draws [bmp] on a four-corner shape of the screen with perspective. [q] = x,y of the top-left,
+         * top-right, bottom-right and bottom-left corners. The picture is cropped to [aspect] (width / height).
+         */
+        private fun drawOnQuad(bmp: Bitmap, q: FloatArray, clip: Path, aspect: Double) {
+            val bw = bmp.width.toFloat()
+            val bh = bmp.height.toFloat()
+            var sw = bw
+            var sh = bw / aspect.toFloat()
+            if (sh > bh) {
+                sh = bh
+                sw = bh * aspect.toFloat()
+            }
+            val sx = (bw - sw) / 2f
+            val sy = (bh - sh) / 2f
+            val src = floatArrayOf(sx, sy, sx + sw, sy, sx + sw, sy + sh, sx, sy + sh)
+            val matrix = Matrix()
+            if (!matrix.setPolyToPoly(src, 0, q, 0, 4)) return
+            val p = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+            c.save()
+            c.clipPath(clip)
+            c.concat(matrix)
+            c.drawBitmap(bmp, 0f, 0f, p)
+            c.restore()
+        }
+
+        /** A picture frame on the left wall, high up (the top left of the wallpaper). */
+        private fun pictureFrame() {
+            val z0 = 0.30
+            val z1 = 0.62
+            val top = 2.95
+            val bot = 2.28
+            // wooden frame, then a light mat, then the picture
+            dp(room(0, top, z0, 0, top, z1, 0, bot, z1, 0, bot, z0), F(t(rgb(0x4A3526))))
+            val fz = 0.012
+            val fh = 0.03
+            dp(
+                room(0, top - fh, z0 + fz, 0, top - fh, z1 - fz, 0, bot + fh, z1 - fz, 0, bot + fh, z0 + fz),
+                F(t(rgb(0xF4EFE6))),
+            )
+            val pz0 = z0 + 0.032
+            val pz1 = z1 - 0.032
+            val pt = top - 0.08
+            val pb = bot + 0.08
+            val area = room(0, pt, pz0, 0, pt, pz1, 0, pb, pz1, 0, pb, pz0)
+            val pic = pics?.frame
+            if (pic != null) {
+                val q = floatArrayOf(
+                    rx(0, pz0).f, ry(pt, pz0).f, rx(0, pz1).f, ry(pt, pz1).f,
+                    rx(0, pz1).f, ry(pb, pz1).f, rx(0, pz0).f, ry(pb, pz0).f,
+                )
+                val bb = RectF()
+                area.computeBounds(bb, true)
+                drawOnQuad(pic, q, area, (bb.width() / bb.height()).toDouble())
+            } else {
+                // No picture yet: a soft sunset so the frame is not empty.
+                dp(area, LG(0, ry(pt, 0.46), 0, ry(pb, 0.46), rgb(0x6C8FD8), rgb(0xF2B38A)))
+            }
+            // the room's light on the picture, and a thin edge
+            dp(area, F(al(tintColor, tintAlpha * 0.7)))
+            dp(area, S(al(rgb(0), 0.25), 1.5))
+        }
+
         // ---------------------------------------------------------------- shelves
 
         private fun shelf(hs: Double, z1: Double, z2: Double) {
@@ -844,7 +915,7 @@ object DeskWallpaper {
             }
         }
 
-        private fun monitor(za: Double, zb: Double, xa: Double, xb: Double, pal: IntArray, seed: Int) {
+        private fun monitor(za: Double, zb: Double, xa: Double, xb: Double, pal: IntArray, seed: Int, idx: Int) {
             val bot = 0.92
             val top = 1.40
             val zc = (za + zb) / 2
@@ -872,6 +943,15 @@ object DeskWallpaper {
             val sb = bb.bottom.toDouble()
             val bw = sr2 - sl
             val bh = sb - st
+            val pic = pics?.monitors?.getOrNull(idx)
+            if (pic != null) {
+                // Your own picture on the screen, in perspective.
+                val q = floatArrayOf(
+                    rx(xa, za).f, ry(top, za).f, rx(xb, zb).f, ry(top, zb).f,
+                    rx(xb, zb).f, ry(bot, zb).f, rx(xa, za).f, ry(bot, za).f,
+                )
+                drawOnQuad(pic, q, scr, bw / bh)
+            } else {
             rect(sl, st, sr2, sb, LG(sl, st, sr2, sb, pal, floatArrayOf(0f, 0.55f, 1f)))
             val sr = Random(seed.toLong())
             for (i in 0 until 7) {
@@ -890,15 +970,16 @@ object DeskWallpaper {
             sil.lineTo(sr2.f, sb.f)
             sil.close()
             dp(sil, F(al(rgb(0x0A0C22), 0.75)))
+            }
             val glare = 0.05 + 0.06 * daylight * (1 - dim)
             dp(poly(sl + bw * 0.55, st, sl + bw * 0.80, st, sl + bw * 0.45, sb, sl + bw * 0.20, sb), F(al(rgb(0xFFFFFF), glare)))
             c.restore()
         }
 
         private fun monitors() {
-            monitor(0.10, 0.33, 0.27, 0.22, intArrayOf(rgb(0x2B1B6E), rgb(0x8A3FD0), rgb(0xFF8A4D)), 3)
-            monitor(0.34, 0.57, 0.22, 0.22, intArrayOf(rgb(0x0B2A6E), rgb(0x2D7BE0), rgb(0x7CF0E0)), 5)
-            monitor(0.58, 0.81, 0.22, 0.27, intArrayOf(rgb(0x3A0F5E), rgb(0xE0407A), rgb(0xFFB454)), 9)
+            monitor(0.10, 0.33, 0.27, 0.22, intArrayOf(rgb(0x2B1B6E), rgb(0x8A3FD0), rgb(0xFF8A4D)), 3, 0)
+            monitor(0.34, 0.57, 0.22, 0.22, intArrayOf(rgb(0x0B2A6E), rgb(0x2D7BE0), rgb(0x7CF0E0)), 5, 1)
+            monitor(0.58, 0.81, 0.22, 0.27, intArrayOf(rgb(0x3A0F5E), rgb(0xE0407A), rgb(0xFFB454)), 9, 2)
         }
 
         private fun speaker(xm: Double, z: Double) {
