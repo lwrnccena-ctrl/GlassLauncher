@@ -180,6 +180,8 @@ fun HomeScreen(
 ) {
     // The living-room layout (verse column, lyrics on the TV) is not used with the gamer room or the depth wallpaper.
     val tvWallpaper = tvWallpaper && !RoomSettings.on && !DepthSettings.on
+    // Simple mode shows the weather under its big clock, so the weather pill at the top is switched off there.
+    val weatherOn = Features.weather && !DepthSettings.on
     // With Favorites row on, the apps pinned from the long-press menu come first, so they fill the dock.
     val apps: List<AppEntry> = if (DockSettings.favorites && DockSettings.pinned.isNotEmpty()) {
         val byPkg = repo.apps.associateBy { it.pkg }
@@ -212,7 +214,7 @@ fun HomeScreen(
     // Width of the screen in pixels (the media tile is placed from the right edge).
     var screenWpx by remember { mutableIntStateOf(0) }
     val forecastDays = weather
-        ?.takeIf { !it.isPlaceholder && it.place.isNotBlank() && Features.weather }
+        ?.takeIf { !it.isPlaceholder && it.place.isNotBlank() && weatherOn }
         ?.days.orEmpty()
     // City picker: type a place, choose it from the matches (or "Detect automatically").
     val scope = rememberCoroutineScope()
@@ -608,14 +610,14 @@ fun HomeScreen(
                 // The greeting is selected: Down goes back to the top buttons, Right to the weather.
                 nameFocus -> when {
                     dy > 0 -> nameFocus = false
-                    dx > 0 && weather != null && Features.weather -> { nameFocus = false; weatherFocus = true }
+                    dx > 0 && weather != null && weatherOn -> { nameFocus = false; weatherFocus = true }
                 }
                 // Up from the top buttons: the greeting (and its name). The depth wallpaper has no greeting.
                 dy < 0 -> if (!DepthSettings.on) nameFocus = true
                 // Down from the top buttons: the now playing card if it is showing, otherwise the apps.
                 dy > 0 -> if (cardShown) mediaFocus = 1 else state.mode = Mode.Browse
                 // Left from the Wi-Fi button: the weather pill.
-                dx < 0 && state.topIndex == 0 && weather != null && Features.weather -> weatherFocus = true
+                dx < 0 && state.topIndex == 0 && weather != null && weatherOn -> weatherFocus = true
                 dx != 0 -> state.topIndex = (state.topIndex + dx).coerceIn(0, topCount - 1)
             }
             Mode.Jiggle -> HomeState.target(state.focus, dx, dy, apps.size)?.let {
@@ -987,7 +989,7 @@ fun HomeScreen(
         ) {
             // Background: sharp at the top of the home screen, blurred and dimmed once you move into the grid.
             if (DepthSettings.on && !RoomSettings.on) {
-                // The depth wallpaper: your photo, then the big clock, then the foreground cutout on top of the clock.
+                // The depth wallpaper: your photo, then the big clock (with the weather under it), then the foreground cutout on top of the clock.
                 DepthBackground(depthBack, Modifier.fillMaxSize())
                 depthFrosted?.let {
                     Image(
@@ -995,7 +997,12 @@ fun HomeScreen(
                         contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low,
                     )
                 }
-                DepthClock(Modifier.fillMaxSize().graphicsLayer { alpha = depthClockAlpha })
+                DepthClock(
+                    Modifier.fillMaxSize().graphicsLayer { alpha = depthClockAlpha },
+                    weather = realWeather?.let { w ->
+                        @Composable { WeatherPill(backdrop, w, false, Modifier, visible = true) }
+                    },
+                )
                 depthFront?.let {
                     Image(
                         it, null, Modifier.fillMaxSize().graphicsLayer { alpha = 1f - blur },
@@ -1086,10 +1093,10 @@ fun HomeScreen(
                     Modifier.align(Alignment.TopEnd).padding(top = 34.dp, end = Metrics.Margin).graphicsLayer { alpha = headerAlpha },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (weather != null && Features.weather) {
+                    if (weather != null && weatherOn) {
                         // The weather pill: selected with Left from the Wi-Fi button. It shrinks away with the icons
                         // while the Control Center opens, and hides while the weather panel is open (the panel
-                        // draws it itself).
+                        // draws it itself). Simple mode has no pill here: its weather sits under the big clock.
                         WeatherPill(
                             backdrop, weather, weatherFocus,
                             Modifier
