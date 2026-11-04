@@ -4,11 +4,14 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -21,17 +24,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.Typeface
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -39,11 +50,16 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.fares.glass.gfx.DepthSettings
 import kotlinx.coroutines.delay
+import android.os.Environment
 import java.text.SimpleDateFormat
+import java.io.File
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
+import kotlin.math.cos
+import kotlin.math.sin
 
 /** Your photo, filling the screen. Plain dark until a photo is found in Glass/depth/. */
 @Composable
@@ -152,6 +168,36 @@ private fun RoundedClockText(text: String, height: Dp, color: Color, modifier: M
     }
 }
 
+/**
+ * The font of the Classic clock. It is read from storage, so no font has to be part of the app:
+ * put a bold font file named clock.ttf (clock.otf, or sf-pro-text.ttf also work) in Glass/depth/ on the TV.
+ * Next to it res/font/depth_clock.ttf is used if the app has one. Without a font the rounded drawn digits are used.
+ * It is read again when Simple mode is switched on.
+ */
+@Composable
+private fun clockFontOrNull(): FontFamily? {
+    val context = LocalContext.current
+    return remember(DepthSettings.reload) {
+        val names = listOf("clock.ttf", "clock.otf", "sf-pro-text.ttf")
+        val dirs = listOfNotNull(
+            File(Environment.getExternalStorageDirectory(), "Glass/depth"),
+            context.getExternalFilesDir(null)?.let { File(it, "depth") },
+        )
+        val file = dirs.flatMap { d -> names.map { File(d, it) } }.firstOrNull { it.isFile && it.canRead() }
+        val fromStorage = file?.let {
+            try {
+                FontFamily(Typeface(android.graphics.Typeface.createFromFile(it)))
+            } catch (e: Exception) {
+                null
+            }
+        }
+        fromStorage ?: run {
+            val id = context.resources.getIdentifier("depth_clock", "font", context.packageName)
+            if (id != 0) FontFamily(Font(id, FontWeight.Bold)) else null
+        }
+    }
+}
+
 /** Draws its content [scale] times bigger and takes the bigger space in the layout. */
 @Composable
 private fun ScaleUp(scale: Float, content: @Composable () -> Unit) {
@@ -176,11 +222,13 @@ private fun ScaleUp(scale: Float, content: @Composable () -> Unit) {
  * the foreground cutout, so the cutout can cover it.
  * [style] is the style chosen in Control Center > Clock: Classic gives the big rounded digits (with the
  * date above); the other styles (Stacked, Analog, Pill, Flip) are drawn bigger, as on the normal home screen.
+ * [sun] = (sunrise, sunset) in milliseconds adds the sun arc around the clock.
  */
 @Composable
 fun DepthClock(
     modifier: Modifier = Modifier,
     style: Int = ClockStyle.CLASSIC,
+    sun: Pair<Long, Long>? = null,
     weather: (@Composable () -> Unit)? = null,
 ) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -193,25 +241,45 @@ fun DepthClock(
     val time = remember(now / 60_000L) { SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(now)) }
     val date = remember(now / 3_600_000L) { SimpleDateFormat("EEEE, d MMMM", Locale.getDefault()).format(Date(now)) }
     val ink = Color(0xFFF2F6F7)
+    val classic = style == ClockStyle.CLASSIC
+    val font = clockFontOrNull()
+    val density = LocalDensity.current
     Box(modifier, contentAlignment = Alignment.TopCenter) {
-        Column(Modifier.padding(top = 48.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            if (style == ClockStyle.CLASSIC) {
+        Column(Modifier.padding(top = 36.dp).fillMaxWidth(0.74f), horizontalAlignment = Alignment.CenterHorizontally) {
+            if (classic) {
                 BasicText(
                     date,
                     style = TextStyle(
                         color = ink.copy(alpha = 0.85f), fontSize = 22.sp, fontWeight = FontWeight.SemiBold,
-                        fontFamily = FontFamily.SansSerif, textAlign = TextAlign.Center,
+                        fontFamily = font ?: FontFamily.SansSerif, textAlign = TextAlign.Center,
                     ),
                 )
                 Spacer(Modifier.height(6.dp))
-                RoundedClockText(time, 150.dp, ink)
-            } else {
-                ScaleUp(1.5f) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        ClockBody(style, now, time, date)
+            }
+            val clock: @Composable () -> Unit = {
+                if (classic) {
+                    val digits = if (sun != null) 120.dp else 150.dp
+                    if (font != null) {
+                        BasicText(
+                            time,
+                            style = TextStyle(
+                                color = ink, fontSize = with(density) { (digits * 1.4f).toSp() },
+                                fontWeight = FontWeight.Bold, fontFamily = font, letterSpacing = (-3).sp,
+                                fontFeatureSettings = "tnum", textAlign = TextAlign.Center,
+                            ),
+                        )
+                    } else {
+                        RoundedClockText(time, digits, ink)
+                    }
+                } else {
+                    ScaleUp(1.5f) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            ClockBody(style, now, time, date)
+                        }
                     }
                 }
             }
+            if (sun != null) SunArcClock(sun.first, sun.second, now, clock) else clock()
             if (weather != null) {
                 Box(Modifier.padding(top = 10.dp)) { weather() }
             }
