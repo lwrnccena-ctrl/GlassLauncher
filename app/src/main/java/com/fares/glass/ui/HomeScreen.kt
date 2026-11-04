@@ -999,6 +999,7 @@ fun HomeScreen(
                 }
                 DepthClock(
                     Modifier.fillMaxSize().graphicsLayer { alpha = depthClockAlpha },
+                    style = repo.clockStyle,
                     weather = realWeather?.let { w ->
                         @Composable { WeatherPill(backdrop, w, false, Modifier, visible = true) }
                     },
