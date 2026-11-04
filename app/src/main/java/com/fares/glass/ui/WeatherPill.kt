@@ -21,7 +21,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.font.FontWeight
@@ -33,18 +35,29 @@ import kotlinx.coroutines.delay
 /** Same height as the round buttons of the icon bar, so the pill lines up with them. */
 val WeatherPillHeight = 40.dp
 
-/** What is inside the pill: the weather icon, the temperature and the words ("27°C Partly cloudy"). */
+/**
+ * What is inside the pill: the weather icon, the temperature and the words ("27°C Partly cloudy").
+ * shadow = true adds a soft dark shadow behind the text (used without the pill, so it stays readable on a photo).
+ */
 @Composable
-fun WeatherPillBody(weather: Weather, ink: Color = Color.White) {
+fun WeatherPillBody(weather: Weather, ink: Color = Color.White, shadow: Boolean = false) {
     val now = System.currentTimeMillis()
     val isDay = weather.sunrise == 0L || now in weather.sunrise..weather.sunset
     val (icon, words) = weatherDescribe(weather.code, isDay)
+    val sh = if (shadow) Shadow(Color.Black.copy(alpha = 0.45f), Offset(0f, 2f), 6f) else null
     Row(verticalAlignment = Alignment.CenterVertically) {
         BasicText(icon, style = txt(ink, 17.sp, FontWeight.Medium))
         Spacer(Modifier.width(8.dp))
-        BasicText("${weather.tempC}\u00B0C", style = txt(ink, 15.sp, FontWeight.SemiBold))
+        BasicText(
+            "${weather.tempC}\u00B0C",
+            style = txt(ink, 15.sp, FontWeight.SemiBold).let { if (sh != null) it.copy(shadow = sh) else it },
+        )
         Spacer(Modifier.width(8.dp))
-        BasicText(words, style = txt(ink.copy(alpha = 0.8f), 14.sp, FontWeight.Medium), maxLines = 1)
+        BasicText(
+            words,
+            style = txt(ink.copy(alpha = 0.8f), 14.sp, FontWeight.Medium).let { if (sh != null) it.copy(shadow = sh) else it },
+            maxLines = 1,
+        )
     }
 }
 
@@ -53,6 +66,7 @@ fun WeatherPillBody(weather: Weather, ink: Color = Color.White) {
  * When it is selected it turns into a white pill with dark text, like the selected buttons of the icon bar.
  * visible = false shrinks it away, true brings it back with a bounce. It moves in the same order as the icon bar:
  * it is the leftmost item, so it shrinks last and grows back first.
+ * plain = true (Simple mode) draws only the icon and text, with no pill behind them.
  */
 @Composable
 fun WeatherPill(
@@ -61,6 +75,7 @@ fun WeatherPill(
     focused: Boolean,
     modifier: Modifier = Modifier,
     visible: Boolean = true,
+    plain: Boolean = false,
 ) {
     val f by animateFloatAsState(if (focused) 1f else 0f, spring(stiffness = 650f), label = "weatherPill")
     val ink = lerp(Color.White, Color(0xFF111114), f)
@@ -87,16 +102,25 @@ fun WeatherPill(
             alpha = show.value.coerceIn(0f, 1f)
         },
     ) {
-        Glass(backdrop, Modifier, shape, tint = Color.White.copy(alpha = 0.10f)) {
+        if (plain) {
             Box(
-                Modifier
-                    .clip(shape)
-                    .height(WeatherPillHeight)
-                    .background(Color.White.copy(alpha = 0.94f * f))
-                    .padding(horizontal = 16.dp),
+                Modifier.height(WeatherPillHeight),
                 contentAlignment = Alignment.Center,
             ) {
-                WeatherPillBody(weather, ink)
+                WeatherPillBody(weather, Color.White, shadow = true)
+            }
+        } else {
+            Glass(backdrop, Modifier, shape, tint = Color.White.copy(alpha = 0.10f)) {
+                Box(
+                    Modifier
+                        .clip(shape)
+                        .height(WeatherPillHeight)
+                        .background(Color.White.copy(alpha = 0.94f * f))
+                        .padding(horizontal = 16.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    WeatherPillBody(weather, ink)
+                }
             }
         }
     }
