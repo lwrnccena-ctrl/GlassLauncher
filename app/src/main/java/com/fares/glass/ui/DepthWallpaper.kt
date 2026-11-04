@@ -23,23 +23,27 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /** Your photo, filling the screen. Plain dark until a photo is found in Glass/depth/. */
 @Composable
@@ -148,12 +152,37 @@ private fun RoundedClockText(text: String, height: Dp, color: Color, modifier: M
     }
 }
 
+/** Draws its content [scale] times bigger and takes the bigger space in the layout. */
+@Composable
+private fun ScaleUp(scale: Float, content: @Composable () -> Unit) {
+    Layout(content = content) { measurables, _ ->
+        val p = measurables.firstOrNull()?.measure(Constraints())
+        if (p == null) {
+            layout(0, 0) {}
+        } else {
+            layout((p.width * scale).roundToInt(), (p.height * scale).roundToInt()) {
+                p.placeWithLayer(0, 0) {
+                    scaleX = scale
+                    scaleY = scale
+                    transformOrigin = TransformOrigin(0f, 0f)
+                }
+            }
+        }
+    }
+}
+
 /**
- * The date, the big rounded clock and (when given) the weather under it. It is drawn between the
- * photo and the foreground cutout, so the cutout can cover them.
+ * The clock of Simple mode, with the weather under it when given. It is drawn between the photo and
+ * the foreground cutout, so the cutout can cover it.
+ * [style] is the style chosen in Control Center > Clock: Classic gives the big rounded digits (with the
+ * date above); the other styles (Stacked, Analog, Pill, Flip) are drawn bigger, as on the normal home screen.
  */
 @Composable
-fun DepthClock(modifier: Modifier = Modifier, weather: (@Composable () -> Unit)? = null) {
+fun DepthClock(
+    modifier: Modifier = Modifier,
+    style: Int = ClockStyle.CLASSIC,
+    weather: (@Composable () -> Unit)? = null,
+) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -166,15 +195,23 @@ fun DepthClock(modifier: Modifier = Modifier, weather: (@Composable () -> Unit)?
     val ink = Color(0xFFF2F6F7)
     Box(modifier, contentAlignment = Alignment.TopCenter) {
         Column(Modifier.padding(top = 48.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            BasicText(
-                date,
-                style = TextStyle(
-                    color = ink.copy(alpha = 0.85f), fontSize = 22.sp, fontWeight = FontWeight.SemiBold,
-                    fontFamily = FontFamily.SansSerif, textAlign = TextAlign.Center,
-                ),
-            )
-            Spacer(Modifier.height(6.dp))
-            RoundedClockText(time, 150.dp, ink)
+            if (style == ClockStyle.CLASSIC) {
+                BasicText(
+                    date,
+                    style = TextStyle(
+                        color = ink.copy(alpha = 0.85f), fontSize = 22.sp, fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.SansSerif, textAlign = TextAlign.Center,
+                    ),
+                )
+                Spacer(Modifier.height(6.dp))
+                RoundedClockText(time, 150.dp, ink)
+            } else {
+                ScaleUp(1.5f) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        ClockBody(style, now, time, date)
+                    }
+                }
+            }
             if (weather != null) {
                 Box(Modifier.padding(top = 10.dp)) { weather() }
             }
