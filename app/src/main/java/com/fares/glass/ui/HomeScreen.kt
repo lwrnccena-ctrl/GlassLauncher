@@ -1002,7 +1002,8 @@ fun HomeScreen(
                     style = repo.clockStyle,
                     sun = roomSun,
                     weather = realWeather?.let { w ->
-                        @Composable { WeatherPill(backdrop, w, false, Modifier, visible = true) }
+                        // Simple mode: the weather is plain text, no pill behind it.
+                        @Composable { WeatherPill(backdrop, w, false, Modifier, visible = true, plain = true) }
                     },
                 )
                 depthFront?.let {
@@ -1113,6 +1114,8 @@ fun HomeScreen(
                         if (state.mode == Mode.Top && mediaFocus < 0 && !nameFocus && !weatherFocus) state.topIndex else -1,
                         Modifier,
                         visible = state.mode != Mode.Control,
+                        // Simple mode: just the icons, no glass circles behind them.
+                        plain = DepthSettings.on,
                     )
                 }
                 // Now playing: visible while a music app is running (playing or paused).
