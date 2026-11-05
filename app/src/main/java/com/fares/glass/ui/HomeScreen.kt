@@ -429,9 +429,14 @@ fun HomeScreen(
             return@LaunchedEffect
         }
         val pics = withContext(Dispatchers.Default) { DepthPictures.load(context) }
-        depthBack = pics.background?.asImageBitmap()
-        depthFront = pics.foreground?.asImageBitmap()
-        depthFrosted = pics.background?.let { bmp ->
+        // Pictures chosen in the in-app picker win over the ones in the Glass/depth folder.
+        val ownBack = withContext(Dispatchers.IO) { ImagePicker.loadSaved(context, ImagePicker.Kind.Background) }
+        val ownFront = withContext(Dispatchers.IO) { ImagePicker.loadSaved(context, ImagePicker.Kind.Cutout) }
+        val back = ownBack ?: pics.background
+        val front = ownFront ?: pics.foreground
+        depthBack = back?.asImageBitmap()
+        depthFront = front?.asImageBitmap()
+        depthFrosted = back?.let { bmp ->
             withContext(Dispatchers.Default) {
                 Blur.frosted(bmp.copy(Bitmap.Config.ARGB_8888, false), 480, 7f, 1.1f, 1.0f).asImageBitmap()
             }
@@ -830,6 +835,7 @@ fun HomeScreen(
             return true
         }
         if (pinMode != null) return pinKey(e)
+        if (ImagePicker.visible) return ImagePicker.onKey(e, context)
         if (Recents.open) return recentsKey(e)
         if (editingName) {
             // The text field and the on-screen keyboard handle the keys; Back cancels.
@@ -989,9 +995,21 @@ fun HomeScreen(
         ) {
             // Background: sharp at the top of the home screen, blurred and dimmed once you move into the grid.
             if (DepthSettings.on && !RoomSettings.on) {
-                // The depth wallpaper: your photo, then the big clock (with the weather under it), then the foreground cutout on top of the clock.
-                DepthBackground(depthBack, Modifier.fillMaxSize())
-                depthFrosted?.let {
+                // The depth wallpaper: your photo (or, without one, the wallpaper picked in the image picker),
+                // then the big clock (with the weather under it), then the foreground cutout on top of the clock.
+                if (depthBack != null) {
+                    DepthBackground(depthBack, Modifier.fillMaxSize())
+                } else {
+                    // No depth photo: use the wallpaper picked in the image picker, or the built-in default.
+                    Crossfade(wallpaper, animationSpec = tween(700), label = "wallpaperSimple") { img ->
+                        if (img != null) {
+                            Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low)
+                        } else {
+                            DepthBackground(null, Modifier.fillMaxSize())
+                        }
+                    }
+                }
+                (depthFrosted ?: backdrop.frosted)?.let {
                     Image(
                         it, null, Modifier.fillMaxSize().graphicsLayer { alpha = blur },
                         contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low,
@@ -1323,6 +1341,8 @@ fun HomeScreen(
                 pinMessage, pinDigits, pinPos,
             )
         }
+        // The in-app picture picker (Simple mode background / cutout). It is drawn above everything.
+        if (ImagePicker.visible) ImagePickerOverlay(backdrop)
         cc.PasswordLayer(backdrop) { focusRequester.requestFocus() }
 
     }
