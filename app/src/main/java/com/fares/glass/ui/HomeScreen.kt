@@ -1070,7 +1070,6 @@ fun HomeScreen(
                 }
             }
             // The gamer room already shows the rain in its window, so the full-screen rain is not drawn on top of it.
-            if (raining && !RoomSettings.on) RainOverlay(Modifier.fillMaxSize())
             Box(
                 Modifier.fillMaxSize().background(
                     Brush.verticalGradient(0f to Color.Transparent, 0.45f to Color.Black.copy(alpha = 0.05f), 1f to Color.Black.copy(alpha = 0.5f)),
@@ -1214,6 +1213,49 @@ fun HomeScreen(
                                 alpha = ((y + 60f) / 100f).coerceIn(0f, 1f) * (if (i >= Metrics.COLS) lowerRows else 1f)
                             },
                     )
+                }
+            }
+
+            // Sky and desk wallpapers: rain on glass. Streaks hit the top of the dock (or of the app tiles once you
+            // scroll into the grid), splash, and leave drops that sit, merge, run down and drip off.
+            if (raining && !RoomSettings.on) {
+                RainGlass(Modifier.fillMaxSize()) { d ->
+                    with(d) {
+                        val out = ArrayList<RainSurface>()
+                        val slide = hideSlide * 240.dp.toPx()
+                        if (DockSettings.dockOn && row == 0 && dockAlpha > 0.5f) {
+                            val l = (Metrics.RowStart - DockInset).toPx()
+                            val t = (topRowY - DockTop - scroll.value.dp).toPx() + slide
+                            out.add(
+                                RainSurface(
+                                    -1,
+                                    androidx.compose.ui.geometry.Rect(
+                                        l, t, l + (Metrics.RowWidth + DockInset * 2).toPx(), t + DockHeight.toPx(),
+                                    ),
+                                    36.dp.toPx(),
+                                ),
+                            )
+                        } else {
+                            apps.forEachIndexed { i, _ ->
+                                val r = i / Metrics.COLS
+                                if (r in (row - 1)..(row + 3)) {
+                                    val x = tileX(i).toPx()
+                                    val y = ((topRowY + Metrics.Pitch * r).value - scroll.value).dp.toPx() +
+                                        (if (r == 0) slide else 0f)
+                                    out.add(
+                                        RainSurface(
+                                            i,
+                                            androidx.compose.ui.geometry.Rect(
+                                                x, y, x + Metrics.TileW.toPx(), y + Metrics.TileH.toPx(),
+                                            ),
+                                            12.dp.toPx(),
+                                        ),
+                                    )
+                                }
+                            }
+                        }
+                        out
+                    }
                 }
             }
 
