@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -326,16 +327,16 @@ fun RainGlass(modifier: Modifier = Modifier, surfaces: (Density) -> List<RainSur
     val sim = remember { RainSim() }
     val surfacesNow by rememberUpdatedState(surfaces)
     var tick by remember { mutableLongStateOf(0L) }
-    var size by remember { mutableStateOf(IntSize.Zero) }
+    var canvasSize by remember { mutableStateOf(IntSize.Zero) }
 
     LaunchedEffect(Unit) {
         var last = 0L
         while (true) {
-            withFrameNanos { now ->
-                if (last != 0L && size.width > 0) {
+            withFrameNanos { now: Long ->
+                if (last != 0L && canvasSize.width > 0) {
                     sim.step(
                         (now - last) / 1_000_000_000f,
-                        size.width.toFloat(), size.height.toFloat(), density.density,
+                        canvasSize.width.toFloat(), canvasSize.height.toFloat(), density.density,
                         surfacesNow(density),
                     )
                 }
@@ -345,7 +346,7 @@ fun RainGlass(modifier: Modifier = Modifier, surfaces: (Density) -> List<RainSur
         }
     }
 
-    Canvas(modifier.onSizeChanged { size = it }) {
+    Canvas(modifier.onSizeChanged { canvasSize = it }) {
         tick // read, so the canvas is drawn again after every step
         sim.draw(this, density.density)
     }
