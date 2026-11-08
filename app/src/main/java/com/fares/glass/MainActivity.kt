@@ -2,6 +2,7 @@ package com.fares.glass
 
 import android.Manifest
 import android.app.ActivityOptions
+import android.app.role.RoleManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -9,6 +10,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Rect
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.provider.Settings
@@ -176,7 +178,14 @@ class MainActivity : ComponentActivity() {
                                 repo.setName(n)
                                 firstRun.edit().putBoolean("named", true).apply()
                             },
-                            onFinished = { needsName.value = false },
+                            onFinished = {
+                                needsName.value = false
+                                // Only a brand-new install gets here: offer to make Glass the default home app.
+                                lifecycleScope.launch {
+                                    delay(600)
+                                    askDefaultHome()
+                                }
+                            },
                         )
                     }
                 }
@@ -413,6 +422,44 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             detectLocation(force = true)
             refreshWeather()
+        }
+    }
+
+    // ---- Default home app ----
+
+    private val homeRoleRequest =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
+
+    /** True when Glass is already the home app the TV opens on the Home button. */
+    private fun isDefaultHome(): Boolean {
+        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        val info = packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
+        return info?.activityInfo?.packageName == packageName
+    }
+
+    /**
+     * Asks once, right after the first-run screen, to make Glass the default home app.
+     * Android 10+ shows its own small system dialog; older systems open the "Home app" settings
+     * screen when the TV has one. If the TV has neither, nothing happens.
+     */
+    private fun askDefaultHome() {
+        val prefs = getSharedPreferences("glass_first_run", Context.MODE_PRIVATE)
+        if (prefs.getBoolean("asked_home", false)) return
+        prefs.edit().putBoolean("asked_home", true).apply()
+        if (isDefaultHome()) return
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                val roles = getSystemService(RoleManager::class.java)
+                if (roles != null && roles.isRoleAvailable(RoleManager.ROLE_HOME) &&
+                    !roles.isRoleHeld(RoleManager.ROLE_HOME)
+                ) {
+                    homeRoleRequest.launch(roles.createRequestRoleIntent(RoleManager.ROLE_HOME))
+                    return
+                }
+            }
+            startActivity(Intent(Settings.ACTION_HOME_SETTINGS))
+        } catch (e: Exception) {
+            Log.w("Glass", "Can't ask for the default home app", e)
         }
     }
 
