@@ -1,4 +1,4 @@
-Name: Build APK
+name: Build APK
 on:
   push:
   workflow_dispatch:
@@ -16,7 +16,6 @@ jobs:
           distribution: temurin
           java-version: 17
       
-      # Added official Gradle setup action with built-in caching and robust downloading
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
