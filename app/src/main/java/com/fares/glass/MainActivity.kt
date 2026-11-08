@@ -52,6 +52,7 @@ import com.fares.glass.ui.HomeScreen
 import com.fares.glass.ui.HomeState
 import com.fares.glass.ui.Mode
 import com.fares.glass.ui.Recents
+import com.fares.glass.ui.RecentsMotion
 import com.fares.glass.ui.Typo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -210,6 +211,9 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         isForeground = true
+        // Tells the recent apps / home screen that we are back: the opened card shrinks back and the
+        // home screen zooms in.
+        RecentsMotion.onResume()
         // Closes the overlay over other apps when the launcher comes back (for example Home pressed).
         GlassOverlayService.dismiss()
         lifecycleScope.launch { repo.refresh() }
@@ -218,6 +222,7 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         isForeground = false
+        RecentsMotion.onPause()
         if (home.mode == Mode.Control) cc.close()
     }
 
@@ -413,10 +418,13 @@ class MainActivity : ComponentActivity() {
 
     // ---- Launching ----
 
-    /** from = where the system animation starts; null = no system animation (the launcher drew its own). */
+    /**
+     * from = where the system animation starts. null or an empty rectangle = no system animation
+     * (the launcher drew its own, like the recent apps card growing to full screen).
+     */
     private fun launch(entry: AppEntry, from: Rect?) {
         if (entry.pkg != packageName) Recents.push(entry.pkg)
-        val options = if (from != null) {
+        val options = if (from != null && from.width() > 0) {
             ActivityOptions.makeScaleUpAnimation(window.decorView, from.left, from.top, from.width(), from.height())
         } else {
             ActivityOptions.makeCustomAnimation(this, 0, 0)
