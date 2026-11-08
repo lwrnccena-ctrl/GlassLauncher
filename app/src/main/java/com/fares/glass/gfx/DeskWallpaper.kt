@@ -455,19 +455,8 @@ object DeskWallpaper {
                     }
                 }
             }
-            if (raining) {
-                val (n, len, alpha, wd) = when (weather) {
-                    Weather.Drizzle -> listOf(60.0, 10.0, 0.35, 1.2)
-                    Weather.Rain -> listOf(220.0, 18.0, 0.45, 1.5)
-                    else -> listOf(320.0, 24.0, 0.55, 1.8)
-                }
-                val ln = S(al(rgb(0xDCE6F5), alpha), wd)
-                repeat(n.toInt()) {
-                    val x = rnd.rf() * (w + 40)
-                    val y = rnd.rf() * h
-                    line(x, y, x - len * 0.25, y + len, ln)
-                }
-            }
+            // (The falling rain streaks are no longer drawn into this picture: the animated rain
+            // that Glass draws on top of the screen covers the whole wallpaper.)
             if (weather == Weather.Storm) {
                 var boltX = w * 0.62
                 var boltY = by0 - 10
