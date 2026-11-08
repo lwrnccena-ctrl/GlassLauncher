@@ -1,4 +1,4 @@
-name: Build APK
+Name: Build APK
 on:
   push:
   workflow_dispatch:
@@ -15,10 +15,6 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-
       - name: Load key
         run: echo "${{ secrets.KEYSTORE_B64 }}" | base64 -d > $GITHUB_WORKSPACE/glass.jks
       - name: Build
