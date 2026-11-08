@@ -394,15 +394,8 @@ object SkyWallpaper {
                 }
             }
 
-            // rain on the glass
-            if (rain) {
-                val drop = stroke(al(rgb(0xFFFFFF), 0.35f), 1.5f)
-                repeat(22) {
-                    val x = win.left + rnd.nextFloat() * ww
-                    val y = win.top + rnd.nextFloat() * wh
-                    c.drawLine(x, y, x - 5f, y + 20f, drop)
-                }
-            }
+            // (The rain on the window is no longer drawn into this picture: the animated rain
+            // that Glass draws on top of the screen covers the window too.)
 
             // reflection on the glass
             val streak = Path().apply {
