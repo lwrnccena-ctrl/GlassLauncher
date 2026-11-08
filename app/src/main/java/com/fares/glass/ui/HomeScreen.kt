@@ -724,6 +724,8 @@ fun HomeScreen(
     fun recentsKey(e: AndroidKey): Boolean {
         val down = e.action == AndroidKey.ACTION_DOWN
         val first = down && e.repeatCount == 0
+        // While an app is opening (its card is growing to full screen) the keys do nothing.
+        if (RecentsMotion.opening != null) return true
         when (e.keyCode) {
             AndroidKey.KEYCODE_DPAD_LEFT -> if (down) recentIndex = (recentIndex - 1).coerceAtLeast(0)
             AndroidKey.KEYCODE_DPAD_RIGHT ->
@@ -746,13 +748,24 @@ fun HomeScreen(
             AndroidKey.KEYCODE_DPAD_CENTER, AndroidKey.KEYCODE_ENTER, AndroidKey.KEYCODE_NUMPAD_ENTER,
             AndroidKey.KEYCODE_BUTTON_A -> if (first) {
                 val entry = recentApps.getOrNull(recentIndex)
-                Recents.open = false
-                if (entry != null) {
-                    // The app opens out of the middle of the screen.
+                if (entry == null) {
+                    Recents.open = false
+                } else if (DockSettings.isLocked(entry.pkg)) {
+                    // A locked app asks for the PIN first, on the home screen.
+                    Recents.open = false
                     val dm = context.resources.displayMetrics
                     val w = dm.widthPixels
                     val h = dm.heightPixels
                     launchApp(entry, Rect(w / 2 - w / 8, h / 2 - h / 8, w / 2 + w / 8, h / 2 + h / 8))
+                } else {
+                    // The card grows to full screen (RecentCards3D), then the app starts with no system
+                    // animation of its own (an empty Rect). The stack stays open until we come back.
+                    scope.launch {
+                        RecentsMotion.openThen(entry.pkg) {
+                            onLaunch(entry, Rect())
+                            recentIndex = 0
+                        }
+                    }
                 }
             }
         }
@@ -961,6 +974,8 @@ fun HomeScreen(
         Modifier
             .fillMaxSize()
             .background(Color.Black)
+            // When Glass comes back from an app, everything above the black zooms in and fades up.
+            .glassReturnReveal()
             .onSizeChanged {
                 backdrop.screen = it
                 screenWpx = it.width
@@ -1285,7 +1300,7 @@ fun HomeScreen(
         // Recent apps: a cascade of cards (double press of Home, or hold Back).
         val recentsAlpha by animateFloatAsState(if (Recents.open) 1f else 0f, tween(220), label = "recents")
         if (recentsAlpha > 0.01f) {
-            RecentCards(
+            RecentCards3D(
                 items = recentApps, selected = recentIndex, alpha = recentsAlpha, itemKey = { it.pkg },
                 label = { it.label },
             ) { entry ->
