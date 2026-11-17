@@ -15,6 +15,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
+import com.fares.glass.R
 
 /**
  * Looping, muted video wallpaper (res/raw/wallpaper_video.mp4).
@@ -51,7 +52,8 @@ class VideoWallpaperView @JvmOverloads constructor(
     /** Creates the player the first time, then plays. */
     fun start() {
         if (player == null) {
-            val uri = Uri.parse("android.resource://${context.packageName}/raw/wallpaper_video")
+            // Using R.raw makes the build fail if the file is missing, instead of failing silently at runtime.
+            val uri = Uri.parse("android.resource://${context.packageName}/${R.raw.wallpaper_video}")
             player = ExoPlayer.Builder(context).build().apply {
                 setVideoTextureView(textureView)
                 setMediaItem(MediaItem.fromUri(uri))
