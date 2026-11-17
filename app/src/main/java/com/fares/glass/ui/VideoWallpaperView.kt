@@ -1,72 +1,70 @@
 package com.fares.glass.ui
 
 import android.content.Context
+import android.graphics.Color
+import android.graphics.Matrix
 import android.net.Uri
 import android.util.AttributeSet
+import android.view.TextureView
+import android.view.View
 import android.widget.FrameLayout
-import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
-import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.AspectRatioFrameLayout
-import androidx.media3.ui.PlayerView
 
 /**
- * Looping, muted video wallpaper.
+ * Looping, muted video wallpaper (res/raw/wallpaper_video.mp4).
  *
- * Usage:
- *   val v = VideoWallpaperView(context)
- *   container.addView(v)
- *   v.start()          // e.g. onStart / when wallpaper is selected
- *   v.stop()           // e.g. onStop / when wallpaper is switched away
- *   v.release()        // when the view is destroyed
+ * It uses a TextureView (not a SurfaceView), so it can sit inside the home screen's blurred,
+ * recorded "scene" layer. It pauses by itself when the launcher is not visible (an app is open,
+ * the screen is off) and plays again when it comes back.
  */
-@OptIn(UnstableApi::class)
 class VideoWallpaperView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : FrameLayout(context, attrs) {
 
-    private val playerView = PlayerView(context).apply {
-        useController = false
-        // ZOOM fills the screen (crops edges). Use RESIZE_MODE_FIT to see the whole frame.
-        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-        setKeepContentOnPlayerReset(true)
-        setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
-        isFocusable = false
-        isClickable = false
-    }
-
+    private val textureView = TextureView(context)
     private var player: ExoPlayer? = null
+    private var videoW = 0
+    private var videoH = 0
+
+    /** true = fill the screen (crops the edges), false = fit the whole video (black bars). */
+    private var zoom = true
 
     init {
         isFocusable = false
-        addView(
-            playerView,
-            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
-        )
+        setBackgroundColor(Color.BLACK)
+        addView(textureView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        textureView.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyScale() }
     }
 
-    /** Change how the video fills the screen. */
     fun setFillMode(zoom: Boolean) {
-        playerView.resizeMode =
-            if (zoom) AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-            else AspectRatioFrameLayout.RESIZE_MODE_FIT
+        this.zoom = zoom
+        applyScale()
     }
 
+    /** Creates the player the first time, then plays. */
     fun start() {
         if (player == null) {
             val uri = Uri.parse("android.resource://${context.packageName}/raw/wallpaper_video")
             player = ExoPlayer.Builder(context).build().apply {
+                setVideoTextureView(textureView)
                 setMediaItem(MediaItem.fromUri(uri))
                 repeatMode = Player.REPEAT_MODE_ALL
                 volume = 0f
-                playWhenReady = true
+                addListener(object : Player.Listener {
+                    override fun onVideoSizeChanged(videoSize: VideoSize) {
+                        videoW = videoSize.width
+                        videoH = videoSize.height
+                        applyScale()
+                    }
+                })
+                playWhenReady = windowVisibility == View.VISIBLE
                 prepare()
             }
-            playerView.player = player
-        } else {
+        } else if (windowVisibility == View.VISIBLE) {
             player?.play()
         }
     }
@@ -76,9 +74,32 @@ class VideoWallpaperView @JvmOverloads constructor(
     }
 
     fun release() {
-        playerView.player = null
         player?.release()
         player = null
+    }
+
+    /** A TextureView stretches the video to its size; this keeps the picture's shape (fill or fit). */
+    private fun applyScale() {
+        val vw = textureView.width.toFloat()
+        val vh = textureView.height.toFloat()
+        if (vw <= 0f || vh <= 0f || videoW <= 0 || videoH <= 0) return
+        val viewRatio = vw / vh
+        val videoRatio = videoW.toFloat() / videoH
+        var sx = 1f
+        var sy = 1f
+        if (zoom) {
+            if (videoRatio > viewRatio) sx = videoRatio / viewRatio else sy = viewRatio / videoRatio
+        } else {
+            if (videoRatio > viewRatio) sy = viewRatio / videoRatio else sx = videoRatio / viewRatio
+        }
+        val m = Matrix()
+        m.setScale(sx, sy, vw / 2f, vh / 2f)
+        textureView.setTransform(m)
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        if (visibility == View.VISIBLE) player?.play() else player?.pause()
     }
 
     override fun onDetachedFromWindow() {
