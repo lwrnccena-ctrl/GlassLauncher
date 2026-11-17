@@ -988,6 +988,16 @@ fun HomeScreen(
             .focusable()
             .onPreviewKeyEvent(::onKey),
     ) {
+        // The video wallpaper (res/raw/wallpaper_video.mp4) sits BEHIND the scene. A video cannot be drawn
+        // reliably inside the recorded / blurred scene layer, so it is not part of it. It loops, is muted,
+        // and pauses by itself while an app is open.
+        if (videoOn) {
+            AndroidView(
+                factory = { ctx -> VideoWallpaperView(ctx).also { it.start() } },
+                modifier = Modifier.fillMaxSize(),
+                onRelease = { it.release() },
+            )
+        }
         // ---- The whole home screen (wallpaper, clock, dock, apps, panels) is one "scene". ----
         // It is recorded so a snapshot can be taken, and it is blurred while the recent apps or the
         // Control Center are open. It also grows a little while the weather panel opens over it.
@@ -1049,13 +1059,7 @@ fun HomeScreen(
                     )
                 }
             } else if (videoOn) {
-                // The video wallpaper: loops, muted, and pauses by itself while an app is open.
-                // (res/raw/wallpaper_video.mp4, played by VideoWallpaperView.)
-                AndroidView(
-                    factory = { ctx -> VideoWallpaperView(ctx).also { it.start() } },
-                    modifier = Modifier.fillMaxSize(),
-                    onRelease = { it.release() },
-                )
+                // The video wallpaper is drawn behind the scene (see above), so nothing is drawn here.
             } else if (RoomSettings.on) {
                 // The gamer room. It glides sideways as the focus moves along the dock.
                 GamerRoomBackground(roomImage, roomFx, Modifier.fillMaxSize())
