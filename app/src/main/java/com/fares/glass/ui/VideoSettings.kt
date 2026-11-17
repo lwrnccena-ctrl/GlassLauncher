@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.fares.glass.gfx.DepthSettings
 
 /**
  * Is the video wallpaper (res/raw/wallpaper_video.mp4) the wallpaper?
@@ -19,6 +20,10 @@ object VideoSettings {
 
     var on by mutableStateOf(DEFAULT_ON)
         private set
+
+    /** True while the video is really the wallpaper (Simple mode wins over it). Glass and the home screen use this. */
+    val active: Boolean
+        get() = on && !DepthSettings.on
 
     fun load(context: Context) {
         on = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY, DEFAULT_ON)
