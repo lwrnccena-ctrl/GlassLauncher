@@ -5,10 +5,13 @@ import android.graphics.Color
 import android.graphics.Matrix
 import android.net.Uri
 import android.util.AttributeSet
+import android.util.Log
 import android.view.TextureView
 import android.view.View
 import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
@@ -59,6 +62,12 @@ class VideoWallpaperView @JvmOverloads constructor(
                         videoW = videoSize.width
                         videoH = videoSize.height
                         applyScale()
+                    }
+
+                    // If the video cannot play, say why (instead of a silent black screen).
+                    override fun onPlayerError(error: PlaybackException) {
+                        Log.e("VideoWallpaper", "Playback failed", error)
+                        Toast.makeText(context, "Video wallpaper error: ${error.errorCodeName}", Toast.LENGTH_LONG).show()
                     }
                 })
                 playWhenReady = windowVisibility == View.VISIBLE
