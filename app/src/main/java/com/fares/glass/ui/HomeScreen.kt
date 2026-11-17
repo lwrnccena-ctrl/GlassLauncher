@@ -79,6 +79,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.fares.glass.R
 import com.fares.glass.data.AppEntry
 import com.fares.glass.data.AppRepository
@@ -178,8 +179,10 @@ fun HomeScreen(
     /** A city was chosen in the city picker (null = back to the automatic location). */
     onSetLocation: (Locator.Place?) -> Unit = {},
 ) {
-    // The living-room layout (verse column, lyrics on the TV) is not used with the gamer room or the depth wallpaper.
-    val tvWallpaper = tvWallpaper && !RoomSettings.on && !DepthSettings.on
+    // The video wallpaper (res/raw/wallpaper_video.mp4). Simple mode (depth wallpaper) wins over it.
+    val videoOn = VideoSettings.on && !DepthSettings.on
+    // The living-room layout (verse column, lyrics on the TV) is not used with the gamer room, the video or the depth wallpaper.
+    val tvWallpaper = tvWallpaper && !RoomSettings.on && !DepthSettings.on && !videoOn
     // Simple mode shows the weather under its big clock, so the weather pill at the top is switched off there.
     val weatherOn = Features.weather && !DepthSettings.on
     // With Favorites row on, the apps pinned from the long-press menu come first, so they fill the dock.
@@ -1045,6 +1048,14 @@ fun HomeScreen(
                         contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low,
                     )
                 }
+            } else if (videoOn) {
+                // The video wallpaper: loops, muted, and pauses by itself while an app is open.
+                // (res/raw/wallpaper_video.mp4, played by VideoWallpaperView.)
+                AndroidView(
+                    factory = { ctx -> VideoWallpaperView(ctx).also { it.start() } },
+                    modifier = Modifier.fillMaxSize(),
+                    onRelease = { it.release() },
+                )
             } else if (RoomSettings.on) {
                 // The gamer room. It glides sideways as the focus moves along the dock.
                 GamerRoomBackground(roomImage, roomFx, Modifier.fillMaxSize())
@@ -1218,7 +1229,7 @@ fun HomeScreen(
 
             // Sky and desk wallpapers: rain on glass. Streaks hit the top of the dock (or of the app tiles once you
             // scroll into the grid), splash, and leave drops that sit, merge, run down and drip off.
-            if (raining && !RoomSettings.on) {
+            if (raining && !RoomSettings.on && !videoOn) {
                 RainGlass(Modifier.fillMaxSize()) { d ->
                     with(d) {
                         val out = ArrayList<RainSurface>()
