@@ -72,8 +72,7 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
-implementation("androidx.media3:media3-exoplayer:1.4.1")
-implementation("androidx.media3:media3-ui:1.4.1")
+    implementation("androidx.media3:media3-exoplayer:1.4.1") 
 
     // ADB tiles (published on JitPack, not Maven Central)
     implementation("com.github.MuntashirAkon:libadb-android:3.1.0")
