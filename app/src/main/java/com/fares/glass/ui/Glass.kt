@@ -38,6 +38,11 @@ class Backdrop {
  * "Liquid Glass" material. The background is static, so instead of blurring in real time (impossible
  * before Android 12) it draws the exact part of the pre-blurred background under the panel, then a
  * tint, a specular highlight at the top, an inner glow and a bright rim.
+ *
+ * While the VIDEO wallpaper is showing there is no pre-blurred picture of it (a moving video cannot be
+ * blurred cheaply on a TV), so the glass is drawn with a light see-through fill instead: a soft highlight
+ * on the top, a little shade at the bottom (keeps white text readable) and a bright rim. Every other
+ * wallpaper looks exactly as before.
  */
 @Composable
 fun Glass(
@@ -81,24 +86,45 @@ fun Glass(
                     center = Offset(size.width / 2, size.height / 2),
                     radius = maxOf(size.width, size.height) * 0.75f,
                 )
+                // Video wallpaper: light glass without any blur (cheap on a TV).
+                val videoSheen = Brush.verticalGradient(
+                    0f to Color.White.copy(alpha = 0.22f),
+                    0.45f to Color.White.copy(alpha = 0.03f),
+                    1f to Color.Black.copy(alpha = 0.14f),
+                )
+                val videoRim = Brush.linearGradient(
+                    0f to Color.White.copy(alpha = 0.90f),
+                    0.5f to Color.White.copy(alpha = 0.12f),
+                    1f to Color.White.copy(alpha = 0.55f),
+                    start = Offset.Zero, end = Offset(size.width, size.height),
+                )
                 val rimWidth = 1.2.dp.toPx()
                 onDrawBehind {
                     if (!showPanel) return@onDrawBehind
                     val o = fixed.value ?: origin
+                    // Read while drawing, so the look switches by itself when the wallpaper changes.
+                    val video = source == null && VideoSettings.active
                     clipPath(path) {
-                        (source ?: backdrop.frosted)?.let { img ->
-                            drawImage(
-                                img,
-                                dstOffset = IntOffset(-o.x.roundToInt(), -o.y.roundToInt()),
-                                dstSize = backdrop.screen,
-                                filterQuality = FilterQuality.Low,
-                            )
+                        if (video) {
+                            // The caller's tint only sets how strong the glass is (the dock's "Dock glass" setting
+                            // still works); its colour is ignored so the glass stays neutral and light.
+                            drawRect(Color.White.copy(alpha = 0.10f + tint.alpha * 0.6f))
+                            drawRect(videoSheen)
+                        } else {
+                            (source ?: backdrop.frosted)?.let { img ->
+                                drawImage(
+                                    img,
+                                    dstOffset = IntOffset(-o.x.roundToInt(), -o.y.roundToInt()),
+                                    dstSize = backdrop.screen,
+                                    filterQuality = FilterQuality.Low,
+                                )
+                            }
+                            drawRect(tint)
+                            drawRect(innerGlow)
+                            drawRect(specular)
                         }
-                        drawRect(tint)
-                        drawRect(innerGlow)
-                        drawRect(specular)
                     }
-                    drawPath(path, rim, style = Stroke(rimWidth))
+                    drawPath(path, if (video) videoRim else rim, style = Stroke(rimWidth))
                 }
             },
         content = content,
