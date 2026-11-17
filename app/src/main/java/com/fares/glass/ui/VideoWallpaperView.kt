@@ -56,7 +56,10 @@ class VideoWallpaperView @JvmOverloads constructor(
             val uri = Uri.parse("android.resource://${context.packageName}/${R.raw.wallpaper_video}")
             player = ExoPlayer.Builder(context).build().apply {
                 setVideoTextureView(textureView)
-                setMediaItem(MediaItem.fromUri(uri))
+                // Two copies of the same video in a playlist: the player moves from one to the next without
+                // stopping, so there is no black frame at the loop point (a single looping item re-seeks and can flash).
+                val item = MediaItem.fromUri(uri)
+                setMediaItems(listOf(item, item))
                 repeatMode = Player.REPEAT_MODE_ALL
                 volume = 0f
                 addListener(object : Player.Listener {
