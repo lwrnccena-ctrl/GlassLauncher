@@ -28,21 +28,33 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlurEffect
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -59,6 +71,8 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlin.math.cos
+import kotlin.math.sin
 
 /**
  * The motion of the widgets page. HomeScreen uses it too, so both pages move as one strip:
@@ -197,34 +211,274 @@ fun WidgetsPage(
     }
 }
 
-// ---- Weather ----
+// ---- Weather: a living sky behind the text (sun, moon, stars, clouds, rain, snow, fog, lightning) ----
+
+private enum class WxScene { Clear, PartlyCloudy, Cloudy, Fog, Drizzle, Rain, Snow, Storm }
+
+/**
+ * The scene for a weather code. This expects the usual WMO weather codes (0 clear, 2 partly cloudy, 3 overcast,
+ * 45 fog, 51+ drizzle, 61+ rain, 71+ snow, 95+ thunderstorm). If your Weather.code uses other numbers, change it here.
+ */
+private fun sceneOf(code: Int?): WxScene = when (code) {
+    null -> WxScene.PartlyCloudy
+    0, 1 -> WxScene.Clear
+    2 -> WxScene.PartlyCloudy
+    3 -> WxScene.Cloudy
+    45, 48 -> WxScene.Fog
+    51, 53, 55, 56, 57, 61, 80 -> WxScene.Drizzle
+    63, 65, 66, 67, 81, 82 -> WxScene.Rain
+    71, 73, 75, 77, 85, 86 -> WxScene.Snow
+    95, 96, 99 -> WxScene.Storm
+    else -> WxScene.PartlyCloudy
+}
+
+private fun sceneColors(sky: WxScene, night: Boolean): Pair<Color, Color> {
+    val day = when (sky) {
+        WxScene.Clear -> Color(0xFF2B6FD1) to Color(0xFF74B8F4)
+        WxScene.PartlyCloudy -> Color(0xFF3F7FCF) to Color(0xFF8CC0EA)
+        WxScene.Cloudy -> Color(0xFF6E7F92) to Color(0xFFA3AFBC)
+        WxScene.Fog -> Color(0xFF8D99A5) to Color(0xFFBAC3CB)
+        WxScene.Drizzle -> Color(0xFF55657A) to Color(0xFF7D8DA0)
+        WxScene.Rain -> Color(0xFF3E4C5E) to Color(0xFF66768A)
+        WxScene.Snow -> Color(0xFF7F91A8) to Color(0xFFBDC9D7)
+        WxScene.Storm -> Color(0xFF262C38) to Color(0xFF4A5364)
+    }
+    if (!night) return day
+    return lerp(day.first, Color(0xFF0A1230), 0.78f) to lerp(day.second, Color(0xFF1C2D52), 0.72f)
+}
+
+/** One cloud: where it starts (fractions of the tile), its size (fraction of the width), drift speed (dp/s) and opacity. */
+private class WxCloud(val x: Float, val y: Float, val size: Float, val speed: Float, val alpha: Float)
+
+private fun wxCloudsOf(sky: WxScene): List<WxCloud> = when (sky) {
+    WxScene.Clear -> listOf(WxCloud(0.20f, 0.62f, 0.12f, 3f, 0.55f))
+    WxScene.PartlyCloudy -> listOf(
+        WxCloud(0.15f, 0.40f, 0.20f, 5f, 0.95f), WxCloud(0.62f, 0.58f, 0.24f, 3.5f, 0.90f),
+        WxCloud(0.95f, 0.30f, 0.14f, 7f, 0.80f),
+    )
+    WxScene.Cloudy, WxScene.Snow -> listOf(
+        WxCloud(0.10f, 0.30f, 0.22f, 4f, 0.95f), WxCloud(0.45f, 0.22f, 0.26f, 3f, 0.95f),
+        WxCloud(0.80f, 0.38f, 0.22f, 5f, 0.90f), WxCloud(0.25f, 0.58f, 0.24f, 3.5f, 0.90f),
+        WxCloud(0.65f, 0.66f, 0.26f, 4.5f, 0.90f), WxCloud(1.00f, 0.50f, 0.20f, 6f, 0.85f),
+    )
+    WxScene.Drizzle, WxScene.Rain, WxScene.Storm -> listOf(
+        WxCloud(0.12f, 0.16f, 0.26f, 4f, 0.95f), WxCloud(0.45f, 0.12f, 0.30f, 3f, 0.95f),
+        WxCloud(0.80f, 0.18f, 0.26f, 5f, 0.95f), WxCloud(0.30f, 0.34f, 0.24f, 3.5f, 0.90f),
+        WxCloud(0.65f, 0.30f, 0.28f, 4f, 0.90f),
+    )
+    WxScene.Fog -> emptyList()
+}
+
+private fun wxCloudColors(sky: WxScene, night: Boolean): Pair<Color, Color> {
+    val day = when (sky) {
+        WxScene.Clear, WxScene.PartlyCloudy -> Color(0xFFFFFFFF) to Color(0xFFD5E3F0)
+        WxScene.Cloudy -> Color(0xFFE3E8ED) to Color(0xFFB4BEC8)
+        WxScene.Snow -> Color(0xFFEEF2F6) to Color(0xFFC9D3DD)
+        WxScene.Drizzle, WxScene.Rain -> Color(0xFF8E9BAA) to Color(0xFF6B788A)
+        WxScene.Storm -> Color(0xFF5C6676) to Color(0xFF414A59)
+        WxScene.Fog -> Color(0xFFFFFFFF) to Color(0xFFFFFFFF)
+    }
+    if (!night) return day
+    val navy = Color(0xFF1B2745)
+    return lerp(day.first, navy, 0.7f) to lerp(day.second, navy, 0.7f)
+}
+
+/** A small repeatable random number (0..1) for the [i]th piece of something ([k] picks which property). */
+private fun wxHash(i: Int, k: Int): Float {
+    var x = i * 374761393 + k * 668265263
+    x = (x xor (x ushr 13)) * 1274126177
+    return ((x xor (x ushr 16)) and 0xFFFF) / 65535f
+}
+
+private fun DrawScope.wxCloud(cx: Float, cy: Float, s: Float, lit: Color, shade: Color) {
+    // The soft underside first, then the lit top.
+    for (pass in 0..1) {
+        val c = if (pass == 0) shade else lit
+        val dy = if (pass == 0) s * 0.08f else 0f
+        drawRoundRect(c, Offset(cx - s, cy - s * 0.15f + dy), Size(s * 2f, s * 0.5f), CornerRadius(s * 0.25f))
+        drawCircle(c, s * 0.42f, Offset(cx - s * 0.45f, cy - s * 0.20f + dy))
+        drawCircle(c, s * 0.58f, Offset(cx + s * 0.08f, cy - s * 0.42f + dy))
+        drawCircle(c, s * 0.38f, Offset(cx + s * 0.60f, cy - s * 0.18f + dy))
+    }
+}
+
+/**
+ * The weather as a moving picture. Everything is drawn from one clock, so it never recomposes: the sun slowly turns its
+ * rays, the moon and stars twinkle, clouds drift, rain streaks fall, snow sways down, fog drifts and a storm flashes.
+ * On entrance the sun / moon rises into place and the weather fades in.
+ */
+@Composable
+private fun WeatherScene(sky: WxScene, night: Boolean, enter: () -> Float, modifier: Modifier) {
+    var time by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(Unit) {
+        val t0 = withFrameNanos { it }
+        while (true) withFrameNanos { time = (it - t0) / 1_000_000_000f }
+    }
+    Canvas(modifier) {
+        val t = time
+        val e = WidgetsEnter.out(WidgetsEnter.local(enter(), 0f, 900f, 100f))
+        val w = size.width
+        val h = size.height
+        val (top, bottom) = sceneColors(sky, night)
+        drawRect(Brush.verticalGradient(listOf(top, bottom)))
+
+        val clearish = sky == WxScene.Clear || sky == WxScene.PartlyCloudy
+
+        // Stars (clear nights).
+        if (night && clearish) {
+            for (i in 0 until 26) {
+                val tw = 0.5f + 0.5f * sin(t * (0.8f + wxHash(i, 4) * 1.6f) + wxHash(i, 5) * 6.28f)
+                drawCircle(
+                    Color.White.copy(alpha = (0.35f + 0.65f * tw) * e),
+                    (0.6f + wxHash(i, 3) * 1.1f).dp.toPx(),
+                    Offset(wxHash(i, 1) * w, wxHash(i, 2) * h * 0.62f),
+                )
+            }
+        }
+
+        // Sun (day) or crescent moon (night).
+        if (clearish) {
+            val c = Offset(w * 0.80f, h * 0.24f + (1f - e) * h * 0.30f)
+            if (!night) {
+                val r = h * 0.11f
+                drawCircle(
+                    Brush.radialGradient(listOf(Color(0x99FFE9A0), Color.Transparent), center = c, radius = r * 4.2f),
+                    r * 4.2f, c,
+                )
+                rotate(degrees = t * 5f, pivot = c) {
+                    for (k in 0 until 12) {
+                        val a = Math.toRadians(k * 30.0).toFloat()
+                        drawLine(
+                            Color(0x33FFF4C8),
+                            Offset(c.x + cos(a) * r * 1.5f, c.y + sin(a) * r * 1.5f),
+                            Offset(c.x + cos(a) * r * 2.7f, c.y + sin(a) * r * 2.7f),
+                            strokeWidth = r * 0.18f, cap = StrokeCap.Round,
+                        )
+                    }
+                }
+                drawCircle(
+                    Brush.radialGradient(listOf(Color(0xFFFFF7D6), Color(0xFFFFD45C)), center = c, radius = r),
+                    r, c,
+                )
+            } else {
+                val r = h * 0.09f
+                drawCircle(
+                    Brush.radialGradient(listOf(Color(0x40DCE6FF), Color.Transparent), center = c, radius = r * 3.6f),
+                    r * 3.6f, c,
+                )
+                val full = Path().apply { addOval(Rect(center = c, radius = r)) }
+                val cut = Path().apply { addOval(Rect(center = c + Offset(r * 0.45f, -r * 0.18f), radius = r * 0.88f)) }
+                drawPath(Path.combine(PathOperation.Difference, full, cut), Color(0xFFF1F3FA))
+            }
+        }
+
+        // Clouds drift slowly to the right and come back on the left.
+        val (lit, shade) = wxCloudColors(sky, night)
+        for (spec in wxCloudsOf(sky)) {
+            val s = spec.size * w
+            val span = w + s * 4f
+            val x = (spec.x * w + t * spec.speed.dp.toPx()) % span - s * 2f
+            val a = spec.alpha * e
+            wxCloud(x, spec.y * h, s, lit.copy(alpha = a), shade.copy(alpha = a))
+        }
+
+        // Fog: wide soft bands that drift sideways.
+        if (sky == WxScene.Fog) {
+            drawRect(Color.White.copy(alpha = 0.10f * e))
+            for (i in 0 until 4) {
+                val xo = sin(t * 0.18f + i * 1.7f) * w * 0.08f
+                drawRoundRect(
+                    Color.White.copy(alpha = 0.16f * e),
+                    Offset(-w * 0.1f + xo, h * (0.25f + 0.17f * i)), Size(w * 1.2f, h * 0.12f), CornerRadius(h * 0.06f),
+                )
+            }
+        }
+
+        // Rain: slanted streaks falling at slightly different speeds.
+        if (sky == WxScene.Drizzle || sky == WxScene.Rain || sky == WxScene.Storm) {
+            val n = when (sky) { WxScene.Drizzle -> 45; WxScene.Rain -> 95; else -> 130 }
+            val len = (if (sky == WxScene.Drizzle) 9f else 16f).dp.toPx()
+            val slant = 0.22f
+            val calm = if (sky == WxScene.Drizzle) 0.6f else 1f
+            for (i in 0 until n) {
+                val frac = (t * (0.9f + wxHash(i, 1) * 0.7f) * calm + wxHash(i, 2)) % 1f
+                val y = frac * (h + len) - len
+                val x = wxHash(i, 3) * (w + slant * h) - slant * y
+                drawLine(
+                    Color(0xFFDDE8F5).copy(alpha = (0.30f + 0.35f * wxHash(i, 4)) * e),
+                    Offset(x, y), Offset(x - slant * len, y + len),
+                    strokeWidth = 1.3f.dp.toPx(), cap = StrokeCap.Round,
+                )
+            }
+        }
+
+        // Thunderstorm: a flash and a bolt every few seconds.
+        if (sky == WxScene.Storm) {
+            val cyc = t % 7f
+            if (cyc < 0.35f) {
+                val f = 1f - cyc / 0.35f
+                drawRect(Color.White.copy(alpha = 0.45f * f * (if ((cyc * 20f).toInt() % 2 == 0) 1f else 0.6f)))
+                if (cyc < 0.2f) {
+                    val bolt = Path().apply {
+                        moveTo(w * 0.32f, h * 0.18f)
+                        lineTo(w * 0.28f, h * 0.38f)
+                        lineTo(w * 0.34f, h * 0.40f)
+                        lineTo(w * 0.26f, h * 0.70f)
+                    }
+                    drawPath(bolt, Color.White.copy(alpha = f), style = Stroke(2.5f.dp.toPx(), cap = StrokeCap.Round))
+                }
+            }
+        }
+
+        // Snow: flakes sway as they fall.
+        if (sky == WxScene.Snow) {
+            for (i in 0 until 48) {
+                val r = (1.1f + wxHash(i, 1) * 2.2f).dp.toPx()
+                val frac = (t * (0.06f + wxHash(i, 2) * 0.12f) + wxHash(i, 3)) % 1f
+                val y = frac * (h + 2f * r) - r
+                val x = wxHash(i, 4) * w + sin(t * (0.8f + wxHash(i, 5)) + wxHash(i, 6) * 6.28f) * 10.dp.toPx()
+                drawCircle(Color.White.copy(alpha = (0.6f + 0.4f * wxHash(i, 7)) * e), r, Offset(x, y))
+            }
+        }
+
+        // A soft dark fade at the bottom keeps the white text easy to read on any sky.
+        drawRect(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.28f)), startY = h * 0.35f, endY = h))
+    }
+}
 
 @Composable
 private fun WeatherCard(backdrop: Backdrop, weather: Weather?, focused: Boolean, enter: () -> Float, modifier: Modifier) {
     val shape = RoundedCornerShape(28.dp)
-    Column(modifier.enterTile(enter, 0).widgetCard(shape, focused).padding(18.dp)) {
-        BasicText("Weather", style = txt(Orange, 15.sp, FontWeight.SemiBold))
-        if (weather != null && weather.place.isNotBlank()) {
-            BasicText(weather.place, style = txt(Color.White.copy(alpha = 0.7f), 13.sp, FontWeight.Medium), maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        Spacer(Modifier.weight(1f))
-        if (weather != null) {
-            // The same weather text as the home screen, drawn bigger.
-            Box(
-                Modifier.graphicsLayer {
-                    scaleX = 1.7f
-                    scaleY = 1.7f
-                    transformOrigin = TransformOrigin(0f, 0.5f)
-                    // The big weather text fades in a moment after its card.
-                    alpha = WidgetsEnter.out(WidgetsEnter.local(enter(), 0f, 450f, 300f))
-                },
-            ) {
-                WeatherPill(backdrop, weather, false, Modifier, visible = true, plain = true)
+    // Night = outside the sunrise..sunset of the place (the same times the sun card uses).
+    val sun = remember(weather) { sunTimes(weather) }
+    val night = System.currentTimeMillis() !in sun.first..sun.second
+    val sky = sceneOf(weather?.takeIf { !it.isPlaceholder }?.code)
+    Box(modifier.enterTile(enter, 0).widgetCard(shape, focused)) {
+        WeatherScene(sky, night, enter, Modifier.matchParentSize().clip(shape))
+        Column(Modifier.fillMaxSize().padding(18.dp)) {
+            BasicText("Weather", style = txt(Orange, 15.sp, FontWeight.SemiBold))
+            if (weather != null && weather.place.isNotBlank()) {
+                BasicText(weather.place, style = txt(Color.White.copy(alpha = 0.8f), 13.sp, FontWeight.Medium), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-        } else {
-            BasicText("Weather isn't available yet", style = txt(Color.White.copy(alpha = 0.6f), 14.sp, FontWeight.Medium))
+            Spacer(Modifier.weight(1f))
+            if (weather != null) {
+                // The same weather text as the home screen, drawn bigger.
+                Box(
+                    Modifier.graphicsLayer {
+                        scaleX = 1.7f
+                        scaleY = 1.7f
+                        transformOrigin = TransformOrigin(0f, 0.5f)
+                        // The big weather text fades in a moment after its card.
+                        alpha = WidgetsEnter.out(WidgetsEnter.local(enter(), 0f, 450f, 300f))
+                    },
+                ) {
+                    WeatherPill(backdrop, weather, false, Modifier, visible = true, plain = true)
+                }
+            } else {
+                BasicText("Weather isn't available yet", style = txt(Color.White.copy(alpha = 0.7f), 14.sp, FontWeight.Medium))
+            }
+            Spacer(Modifier.weight(1f))
         }
-        Spacer(Modifier.weight(1f))
     }
 }
 
@@ -441,8 +695,8 @@ private fun SunArc(t: Float?, enter: () -> Float, modifier: Modifier) {
 
 // ---- Screen time (under the calendar) ----
 
-private class AppUse(val label: String, val ms: Long)
-private class ScreenTimeData(val granted: Boolean, val totalMs: Long, val top: List<AppUse>)
+private class WidgetAppUse(val label: String, val ms: Long)
+private class WidgetScreenTime(val granted: Boolean, val totalMs: Long, val top: List<WidgetAppUse>)
 
 private fun formatDuration(ms: Long): String {
     val m = ms / 60_000L
@@ -461,8 +715,8 @@ private fun hasUsageAccess(context: Context): Boolean {
 }
 
 /** Today's foreground time per app (needs "Usage access" for this app in the TV's settings). */
-private fun loadScreenTime(context: Context): ScreenTimeData {
-    if (!hasUsageAccess(context)) return ScreenTimeData(false, 0L, emptyList())
+private fun loadScreenTime(context: Context): WidgetScreenTime {
+    if (!hasUsageAccess(context)) return WidgetScreenTime(false, 0L, emptyList())
     val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
     val dayStart = Calendar.getInstance().apply {
         set(Calendar.HOUR_OF_DAY, 0)
@@ -477,15 +731,15 @@ private fun loadScreenTime(context: Context): ScreenTimeData {
     val top = used.take(4).map { s ->
         val label = runCatching { pm.getApplicationLabel(pm.getApplicationInfo(s.packageName, 0)).toString() }
             .getOrDefault(s.packageName)
-        AppUse(label, s.totalTimeInForeground)
+        WidgetAppUse(label, s.totalTimeInForeground)
     }
-    return ScreenTimeData(true, used.sumOf { it.totalTimeInForeground }, top)
+    return WidgetScreenTime(true, used.sumOf { it.totalTimeInForeground }, top)
 }
 
 @Composable
 private fun ScreenTimeCard(enter: () -> Float, modifier: Modifier) {
     val context = LocalContext.current
-    val usage by produceState<ScreenTimeData?>(null) {
+    val usage by produceState<WidgetScreenTime?>(null) {
         value = withContext(Dispatchers.IO) { runCatching { loadScreenTime(context) }.getOrNull() }
     }
     val u = usage
