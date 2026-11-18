@@ -210,6 +210,17 @@ fun HomeScreen(
     var forecastOpen by remember { mutableStateOf(false) }
     // Selected day in the weather panel; one past the last day is the "Change location" row.
     var forecastDay by remember { mutableIntStateOf(0) }
+    // Widgets page: Left on the first app opens it, Back closes it. Focus: 0 = the weather card, 1.. = the apps.
+    var widgetsOpen by remember { mutableStateOf(false) }
+    var widgetsFocus by remember { mutableIntStateOf(1) }
+    // 0 = closed, 1 = open. The home screen and the widgets page move as one strip with this value, and both are
+    // blurred while it moves. It is only read while drawing, so animating it never recomposes this screen.
+    val widgetsAnim = animateFloatAsState(
+        if (widgetsOpen) 1f else 0f,
+        tween(WidgetsMotion.DurationMs, easing = WidgetsMotion.Easing),
+        label = "widgets",
+    )
+    val widgetsShown by remember { derivedStateOf { widgetsAnim.value > 0.001f } }
     // Where the small weather text sits on the screen: the weather panel grows out of it.
     var weatherBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     // Where the now playing card sits on the home screen: it flies from here to the Control Center tile.
@@ -283,6 +294,7 @@ fun HomeScreen(
         if (Recents.open) {
             recentIndex = 0
             mediaFocus = -1
+            widgetsOpen = false
             if (state.mode == Mode.Control) cc.close() else state.mode = Mode.Browse
         }
     }
@@ -317,13 +329,13 @@ fun HomeScreen(
     // Which button of the tile is selected (-1 = the tile is not selected).
     val tileFocus = if (ccOpen && cc.page == CcPage.Main && cc.index == CcMediaTile) cc.mediaSub else -1
 
-    // Blur behind the recent apps AND behind the Control Center.
+    // Blur behind the recent apps, the Control Center AND while the widgets page slides.
     // Android 12+: the whole home screen (wallpaper, greeting, clock, weather, dock, apps) is blurred live.
-    // Android 7-11 can't do that, so one snapshot of the home screen is taken when recents / Control Center
-    // opens, blurred once with Glass's own Blur, and faded in on top.
+    // Android 7-11 can't do that, so one snapshot of the home screen is taken when recents / Control Center /
+    // the widgets page opens, blurred once with Glass's own Blur, and faded in on top.
     val sceneLayer = rememberGraphicsLayer()
     var frozen by remember { mutableStateOf<ImageBitmap?>(null) }
-    val blurWanted = Recents.open || state.mode == Mode.Control
+    val blurWanted = Recents.open || state.mode == Mode.Control || widgetsOpen
     val frozenAlpha by animateFloatAsState(
         if (blurWanted && frozen != null) 1f else 0f, tween(300), label = "frozen",
     )
@@ -597,6 +609,12 @@ fun HomeScreen(
     fun move(dx: Int, dy: Int) {
         when (state.mode) {
             Mode.Browse -> {
+                // Left on the very first app opens the widgets page (it slides in from the left).
+                if (dx < 0 && state.focus == 0) {
+                    widgetsFocus = 1
+                    widgetsOpen = true
+                    return
+                }
                 if (dy < 0 && row == 0) {
                     // Above the dock: the now playing card if it is showing (play/pause is selected first),
                     // from any app in the row. Up again goes on to the glass buttons at the top right.
@@ -842,6 +860,44 @@ fun HomeScreen(
         return true
     }
 
+    /**
+     * Keys while the widgets page is open. Focus: 0 = the weather card, 1.. = the apps in a
+     * WIDGET_APP_COLS-wide grid. Back (or Menu) slides the page away again.
+     */
+    fun widgetsKey(e: AndroidKey): Boolean {
+        val down = e.action == AndroidKey.ACTION_DOWN
+        val first = down && e.repeatCount == 0
+        val cols = WIDGET_APP_COLS
+        val count = minOf(apps.size, WIDGET_APP_COUNT)
+        when (e.keyCode) {
+            AndroidKey.KEYCODE_DPAD_LEFT ->
+                if (down && widgetsFocus > 1 && (widgetsFocus - 1) % cols > 0) widgetsFocus--
+            AndroidKey.KEYCODE_DPAD_RIGHT ->
+                if (down && widgetsFocus >= 1 && (widgetsFocus - 1) % cols < cols - 1 && widgetsFocus < count) widgetsFocus++
+            AndroidKey.KEYCODE_DPAD_UP -> if (down) {
+                widgetsFocus = if (widgetsFocus <= cols) 0 else widgetsFocus - cols
+            }
+            AndroidKey.KEYCODE_DPAD_DOWN -> if (down) {
+                widgetsFocus = when {
+                    widgetsFocus == 0 -> if (count > 0) 1 else 0
+                    widgetsFocus + cols <= count -> widgetsFocus + cols
+                    else -> widgetsFocus
+                }
+            }
+            AndroidKey.KEYCODE_DPAD_CENTER, AndroidKey.KEYCODE_ENTER, AndroidKey.KEYCODE_NUMPAD_ENTER,
+            AndroidKey.KEYCODE_BUTTON_A -> if (first) {
+                apps.getOrNull(widgetsFocus - 1)?.let { entry ->
+                    val dm = context.resources.displayMetrics
+                    val w = dm.widthPixels
+                    val h = dm.heightPixels
+                    launchApp(entry, Rect(w / 2 - w / 8, h / 2 - h / 8, w / 2 + w / 8, h / 2 + h / 8))
+                }
+            }
+            AndroidKey.KEYCODE_BACK, AndroidKey.KEYCODE_MENU -> if (first) widgetsOpen = false
+        }
+        return true
+    }
+
     fun onKey(event: KeyEvent): Boolean {
         val e = event.nativeKeyEvent
         activity++
@@ -865,6 +921,7 @@ fun HomeScreen(
         if (locOpen) return locationKey(e)
         if (inputOpen) return inputKey(e)
         if (forecastOpen && forecastDays.isNotEmpty()) return forecastKey(e)
+        if (widgetsOpen) return widgetsKey(e)
 
         // Yellow button: toggles the Control Center. This sits before the Control Center's own key
         // handler, otherwise that handler would swallow the key while the panel is open.
@@ -1003,8 +1060,9 @@ fun HomeScreen(
             }
         }
         // ---- The whole home screen (wallpaper, clock, dock, apps, panels) is one "scene". ----
-        // It is recorded so a snapshot can be taken, and it is blurred while the recent apps or the
-        // Control Center are open. It also grows a little while the weather panel opens over it.
+        // It is recorded so a snapshot can be taken, and it is blurred while the recent apps, the
+        // Control Center or the widgets page slide are open. It also grows a little while the weather panel
+        // opens over it, and it is pushed out to the right while the widgets page comes in from the left.
         // The Control Center panel itself is drawn OUTSIDE this scene, so it stays sharp.
         Box(
             Modifier
@@ -1013,9 +1071,16 @@ fun HomeScreen(
                     val s = 1f + 0.04f * islandAnim.value
                     scaleX = s
                     scaleY = s
+                    // One strip with the widgets page: the home screen leaves to the right (0 -> one screen width).
+                    translationX = widgetsAnim.value * size.width
                     if (Build.VERSION.SDK_INT >= 31) {
-                        // Live blur of everything in the scene (Android 12+).
-                        val mix = maxOf(recentsMix, (ccAnim.value * 1.6f).coerceAtMost(1f))
+                        // Live blur of everything in the scene (Android 12+). The widgets blur is strongest
+                        // in the middle of the slide and gone when the slide is finished.
+                        val mix = maxOf(
+                            recentsMix,
+                            (ccAnim.value * 1.6f).coerceAtMost(1f),
+                            WidgetsMotion.blurMix(widgetsAnim.value),
+                        )
                         val px = 24.dp.toPx() * mix
                         renderEffect = if (px > 0.5f) BlurEffect(px, px) else null
                     }
@@ -1308,13 +1373,23 @@ fun HomeScreen(
         }
         // ---- End of the scene. ----
 
-        // Android 7-11: the blurred snapshot of the scene, faded in.
+        // Android 7-11: the blurred snapshot of the scene, faded in. It slides with the scene when the
+        // widgets page comes in, and is also faded in by the widgets blur curve.
         frozen?.let {
             Image(
                 it, null,
-                Modifier.fillMaxSize().graphicsLayer { alpha = frozenAlpha },
+                Modifier.fillMaxSize().graphicsLayer {
+                    alpha = maxOf(frozenAlpha, WidgetsMotion.blurMix(widgetsAnim.value))
+                    translationX = widgetsAnim.value * size.width
+                },
                 contentScale = ContentScale.FillBounds, filterQuality = FilterQuality.Low,
             )
+        }
+
+        // The widgets page: it slides in from the left edge, blurred while it moves (the blur and the slide
+        // are inside WidgetsPage and read the same progress as the scene above).
+        if (widgetsShown) {
+            WidgetsPage(backdrop, apps, weather, widgetsFocus, { widgetsAnim.value })
         }
 
         // Lyrics of the song that is playing, on the TV screen of the sky wallpaper. They are drawn outside
