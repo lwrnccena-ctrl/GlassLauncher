@@ -852,6 +852,7 @@ fun HomeScreen(
         }
         if (pinMode != null) return pinKey(e)
         if (ImagePicker.visible) return ImagePicker.onKey(e, context)
+        if (VideoPicker.visible) return VideoPicker.onKey(e)
         if (Recents.open) return recentsKey(e)
         if (editingName) {
             // The text field and the on-screen keyboard handle the keys; Back cancels.
@@ -992,11 +993,14 @@ fun HomeScreen(
         // reliably inside the recorded / blurred scene layer, so it is not part of it. It loops, is muted,
         // and pauses by itself while an app is open.
         if (videoOn) {
-            AndroidView(
-                factory = { ctx -> VideoWallpaperView(ctx).also { it.start() } },
-                modifier = Modifier.fillMaxSize(),
-                onRelease = { it.release() },
-            )
+            // key(): choosing another video rebuilds the view with the new one.
+            key(VideoSettings.customUri, VideoSettings.smoothLoop) {
+                AndroidView(
+                    factory = { ctx -> VideoWallpaperView(ctx).also { it.start(VideoSettings.customUri, VideoSettings.smoothLoop) } },
+                    modifier = Modifier.fillMaxSize(),
+                    onRelease = { it.release() },
+                )
+            }
         }
         // ---- The whole home screen (wallpaper, clock, dock, apps, panels) is one "scene". ----
         // It is recorded so a snapshot can be taken, and it is blurred while the recent apps or the
@@ -1415,6 +1419,8 @@ fun HomeScreen(
         }
         // The in-app picture picker (Simple mode background / cutout). It is drawn above everything.
         if (ImagePicker.visible) ImagePickerOverlay(backdrop)
+        // The video wallpaper list.
+        if (VideoPicker.visible) VideoPickerOverlay(backdrop)
         cc.PasswordLayer(backdrop) { focusRequester.requestFocus() }
 
     }
