@@ -210,9 +210,8 @@ fun HomeScreen(
     var forecastOpen by remember { mutableStateOf(false) }
     // Selected day in the weather panel; one past the last day is the "Change location" row.
     var forecastDay by remember { mutableIntStateOf(0) }
-    // Widgets page: Left on the first app opens it, Back closes it. Focus: 0 = the weather card, 1.. = the apps.
+    // Widgets page: Left on the first app opens it, Back closes it.
     var widgetsOpen by remember { mutableStateOf(false) }
-    var widgetsFocus by remember { mutableIntStateOf(1) }
     // 0 = closed, 1 = open. The home screen and the widgets page move as one strip with this value, and both are
     // blurred while it moves. It is only read while drawing, so animating it never recomposes this screen.
     val widgetsAnim = animateFloatAsState(
@@ -611,7 +610,6 @@ fun HomeScreen(
             Mode.Browse -> {
                 // Left on the very first app opens the widgets page (it slides in from the left).
                 if (dx < 0 && state.focus == 0) {
-                    widgetsFocus = 1
                     widgetsOpen = true
                     return
                 }
@@ -860,40 +858,11 @@ fun HomeScreen(
         return true
     }
 
-    /**
-     * Keys while the widgets page is open. Focus: 0 = the weather card, 1.. = the apps in a
-     * WIDGET_APP_COLS-wide grid. Back (or Menu) slides the page away again.
-     */
+    /** Keys while the widgets page is open: Back (or Menu) slides it away again, the other keys do nothing. */
     fun widgetsKey(e: AndroidKey): Boolean {
-        val down = e.action == AndroidKey.ACTION_DOWN
-        val first = down && e.repeatCount == 0
-        val cols = WIDGET_APP_COLS
-        val count = minOf(apps.size, WIDGET_APP_COUNT)
+        val first = e.action == AndroidKey.ACTION_DOWN && e.repeatCount == 0
         when (e.keyCode) {
-            AndroidKey.KEYCODE_DPAD_LEFT ->
-                if (down && widgetsFocus > 1 && (widgetsFocus - 1) % cols > 0) widgetsFocus--
-            AndroidKey.KEYCODE_DPAD_RIGHT ->
-                if (down && widgetsFocus >= 1 && (widgetsFocus - 1) % cols < cols - 1 && widgetsFocus < count) widgetsFocus++
-            AndroidKey.KEYCODE_DPAD_UP -> if (down) {
-                widgetsFocus = if (widgetsFocus <= cols) 0 else widgetsFocus - cols
-            }
-            AndroidKey.KEYCODE_DPAD_DOWN -> if (down) {
-                widgetsFocus = when {
-                    widgetsFocus == 0 -> if (count > 0) 1 else 0
-                    widgetsFocus + cols <= count -> widgetsFocus + cols
-                    else -> widgetsFocus
-                }
-            }
-            AndroidKey.KEYCODE_DPAD_CENTER, AndroidKey.KEYCODE_ENTER, AndroidKey.KEYCODE_NUMPAD_ENTER,
-            AndroidKey.KEYCODE_BUTTON_A -> if (first) {
-                apps.getOrNull(widgetsFocus - 1)?.let { entry ->
-                    val dm = context.resources.displayMetrics
-                    val w = dm.widthPixels
-                    val h = dm.heightPixels
-                    launchApp(entry, Rect(w / 2 - w / 8, h / 2 - h / 8, w / 2 + w / 8, h / 2 + h / 8))
-                }
-            }
-            AndroidKey.KEYCODE_BACK, AndroidKey.KEYCODE_MENU -> if (first) widgetsOpen = false
+            AndroidKey.KEYCODE_BACK, AndroidKey.KEYCODE_MENU, AndroidKey.KEYCODE_DPAD_RIGHT -> if (first) widgetsOpen = false
         }
         return true
     }
@@ -1389,7 +1358,7 @@ fun HomeScreen(
         // The widgets page: it slides in from the left edge, blurred while it moves (the blur and the slide
         // are inside WidgetsPage and read the same progress as the scene above).
         if (widgetsShown) {
-            WidgetsPage(backdrop, apps, weather, widgetsFocus, { widgetsAnim.value })
+            WidgetsPage(backdrop, weather, { widgetsAnim.value })
         }
 
         // Lyrics of the song that is playing, on the TV screen of the sky wallpaper. They are drawn outside
