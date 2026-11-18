@@ -858,10 +858,13 @@ fun HomeScreen(
         return true
     }
 
-    /** Keys while the widgets page is open: Back (or Menu) slides it away again, the other keys do nothing. */
+    /** Keys while the widgets page is open: Back (or Menu) slides it away again, OK opens the Usage access settings if needed. */
     fun widgetsKey(e: AndroidKey): Boolean {
         val first = e.action == AndroidKey.ACTION_DOWN && e.repeatCount == 0
         when (e.keyCode) {
+            // OK: turns on Usage access for the screen time card (when it is still off).
+            AndroidKey.KEYCODE_DPAD_CENTER, AndroidKey.KEYCODE_ENTER, AndroidKey.KEYCODE_NUMPAD_ENTER,
+            AndroidKey.KEYCODE_BUTTON_A -> if (first && !hasUsageAccess(context)) openUsageAccessSettings(context)
             AndroidKey.KEYCODE_BACK, AndroidKey.KEYCODE_MENU, AndroidKey.KEYCODE_DPAD_RIGHT -> if (first) widgetsOpen = false
         }
         return true
