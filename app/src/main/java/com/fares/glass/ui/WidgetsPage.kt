@@ -3,6 +3,9 @@ package com.fares.glass.ui
 import android.app.AppOpsManager
 import android.app.usage.UsageStatsManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import android.os.Build
 import android.os.Process
 import androidx.compose.animation.core.Animatable
@@ -21,6 +24,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -40,6 +44,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
@@ -72,6 +77,7 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
@@ -122,7 +128,7 @@ object WidgetsEnter {
 
 private val CardColor = Color(0xFF1C1C1E)
 private val Orange = Color(0xFFFF9F0A)
-private val Blue = Color(0xFF3B82F6)
+private val IosRed = Color(0xFFFF453A)
 private val SunYellow = Color(0xFFFFC93C)
 private val UsageColors = listOf(Color(0xFF378ADD), Color(0xFFD85A30), Color(0xFFD4537E), Color(0xFF1D9E75))
 private val UsageOther = Color(0xFF5F5E5A)
@@ -134,10 +140,10 @@ private fun Modifier.widgetCard(shape: Shape, focused: Boolean = false): Modifie
         scaleX = s
         scaleY = s
     }
-    .background(CardColor.copy(alpha = 0.88f), shape)
+    .background(CardColor.copy(alpha = 0.58f), shape)
     .border(
         if (focused) 3.dp else 1.dp,
-        if (focused) Color.White else Color.White.copy(alpha = 0.10f),
+        if (focused) Color.White else Color.White.copy(alpha = 0.14f),
         shape,
     )
 
@@ -194,11 +200,11 @@ fun WidgetsPage(
             Modifier.fillMaxSize().padding(start = Metrics.Margin, end = Metrics.Margin, top = 36.dp, bottom = 36.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Row(Modifier.weight(172f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(Modifier.weight(150f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 WeatherCard(backdrop, weather, true, raw, Modifier.weight(1f).fillMaxHeight())
                 CalendarCard(raw, Modifier.weight(1f).fillMaxHeight())
             }
-            Row(Modifier.weight(90f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(Modifier.weight(112f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 SunCard(weather, raw, Modifier.weight(1f).fillMaxHeight())
                 ScreenTimeCard(raw, Modifier.weight(1f).fillMaxHeight())
             }
@@ -251,7 +257,7 @@ private fun sceneColors(sky: WxScene, night: Boolean): Pair<Color, Color> {
 private class WxCloud(val x: Float, val y: Float, val size: Float, val speed: Float, val alpha: Float)
 
 private fun wxCloudsOf(sky: WxScene): List<WxCloud> = when (sky) {
-    WxScene.Clear -> listOf(WxCloud(0.20f, 0.62f, 0.12f, 3f, 0.55f))
+    WxScene.Clear -> emptyList()
     WxScene.PartlyCloudy -> listOf(
         WxCloud(0.15f, 0.40f, 0.20f, 5f, 0.95f), WxCloud(0.62f, 0.58f, 0.24f, 3.5f, 0.90f),
         WxCloud(0.95f, 0.30f, 0.14f, 7f, 0.80f),
@@ -310,9 +316,16 @@ private fun DrawScope.wxCloud(cx: Float, cy: Float, s: Float, lit: Color, shade:
 @Composable
 private fun WeatherScene(sky: WxScene, night: Boolean, enter: () -> Float, modifier: Modifier) {
     var time by remember { mutableFloatStateOf(0f) }
+    // Runs at about 30 frames a second: the scene is soft, so it looks the same and it is easy on a TV's GPU.
     LaunchedEffect(Unit) {
         val t0 = withFrameNanos { it }
-        while (true) withFrameNanos { time = (it - t0) / 1_000_000_000f }
+        var last = 0L
+        while (true) withFrameNanos { now ->
+            if (now - last >= 33_000_000L) {
+                last = now
+                time = (now - t0) / 1_000_000_000f
+            }
+        }
     }
     Canvas(modifier) {
         val t = time
@@ -396,7 +409,7 @@ private fun WeatherScene(sky: WxScene, night: Boolean, enter: () -> Float, modif
 
         // Rain: slanted streaks falling at slightly different speeds.
         if (sky == WxScene.Drizzle || sky == WxScene.Rain || sky == WxScene.Storm) {
-            val n = when (sky) { WxScene.Drizzle -> 45; WxScene.Rain -> 95; else -> 130 }
+            val n = when (sky) { WxScene.Drizzle -> 36; WxScene.Rain -> 70; else -> 90 }
             val len = (if (sky == WxScene.Drizzle) 9f else 16f).dp.toPx()
             val slant = 0.22f
             val calm = if (sky == WxScene.Drizzle) 0.6f else 1f
@@ -442,42 +455,250 @@ private fun WeatherScene(sky: WxScene, night: Boolean, enter: () -> Float, modif
         }
 
         // A soft dark fade at the bottom keeps the white text easy to read on any sky.
-        drawRect(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.28f)), startY = h * 0.35f, endY = h))
+        drawRect(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.36f)), startY = h * 0.40f, endY = h))
+    }
+}
+
+// ---- iOS style weather icons (drawn with gradients, so they stay sharp at any size) ----
+
+/** A cloud outline made of one round-bottomed body and three puffs, centred on [cx],[cy] and [w] wide. */
+private fun cloudPath(cx: Float, cy: Float, w: Float): Path {
+    val s = w / 2f
+    var p = Path().apply {
+        addRoundRect(RoundRect(cx - s, cy - 0.15f * s, cx + s, cy + 0.35f * s, CornerRadius(0.25f * s)))
+    }
+    for ((dx, dy, r) in listOf(Triple(-0.45f, -0.20f, 0.42f), Triple(0.08f, -0.42f, 0.58f), Triple(0.60f, -0.18f, 0.38f))) {
+        val puff = Path().apply { addOval(Rect(Offset(cx + dx * s, cy + dy * s), r * s)) }
+        p = Path.combine(PathOperation.Union, p, puff)
+    }
+    return p
+}
+
+/** A glossy cloud: a soft shadow under it, then a body that goes from bright at the top to a cool grey at the bottom. */
+private fun DrawScope.iosCloud(cx: Float, cy: Float, w: Float, top: Color, bottom: Color) {
+    val s = w / 2f
+    val path = cloudPath(cx, cy, w)
+    drawPath(cloudPath(cx, cy + s * 0.07f, w), Color(0x22000000))
+    drawPath(path, Brush.verticalGradient(listOf(top, bottom), startY = cy - s, endY = cy + s * 0.38f))
+}
+
+private val CloudLight = Color(0xFFFFFFFF) to Color(0xFFC5D6EC)
+private val CloudGrey = Color(0xFFE9EEF4) to Color(0xFFAAB7C6)
+private val CloudDark = Color(0xFFAEBBCB) to Color(0xFF657386)
+
+private fun DrawScope.iosSun(c: Offset, r: Float) {
+    drawCircle(Brush.radialGradient(listOf(Color(0x66FFB02E), Color.Transparent), center = c, radius = r * 2.1f), r * 2.1f, c)
+    for (k in 0 until 8) {
+        val a = Math.toRadians(k * 45.0).toFloat()
+        drawLine(
+            Color(0xFFFFC53D),
+            Offset(c.x + cos(a) * r * 1.32f, c.y + sin(a) * r * 1.32f),
+            Offset(c.x + cos(a) * r * 1.68f, c.y + sin(a) * r * 1.68f),
+            strokeWidth = r * 0.2f, cap = StrokeCap.Round,
+        )
+    }
+    val hi = Offset(c.x - r * 0.25f, c.y - r * 0.3f)
+    drawCircle(Brush.radialGradient(listOf(Color(0xFFFFEE9A), Color(0xFFFFB02E)), center = hi, radius = r * 1.5f), r, c)
+}
+
+private fun DrawScope.iosMoon(c: Offset, r: Float) {
+    drawCircle(Brush.radialGradient(listOf(Color(0x44FFF2B8), Color.Transparent), center = c, radius = r * 2.0f), r * 2.0f, c)
+    val full = Path().apply { addOval(Rect(c, r)) }
+    val cut = Path().apply { addOval(Rect(c + Offset(r * 0.5f, -r * 0.2f), r * 0.88f)) }
+    drawPath(
+        Path.combine(PathOperation.Difference, full, cut),
+        Brush.linearGradient(listOf(Color(0xFFFFF6CF), Color(0xFFF2D472)), start = c - Offset(r, r), end = c + Offset(r, r)),
+    )
+}
+
+/** One weather icon in the style of the iPhone weather app. [u] = the icon's size; everything is placed as a fraction of it. */
+private fun DrawScope.iosIcon(scene: WxScene, night: Boolean) {
+    val u = size.minDimension
+    fun o(x: Float, y: Float) = Offset(x * u, y * u)
+    val line = u * 0.045f
+    when (scene) {
+        WxScene.Clear -> if (night) iosMoon(o(0.5f, 0.5f), u * 0.25f) else iosSun(o(0.5f, 0.5f), u * 0.21f)
+        WxScene.PartlyCloudy -> {
+            if (night) iosMoon(o(0.62f, 0.36f), u * 0.18f) else iosSun(o(0.64f, 0.36f), u * 0.15f)
+            iosCloud(u * 0.44f, u * 0.62f, u * 0.74f, CloudLight.first, CloudLight.second)
+        }
+        WxScene.Cloudy -> {
+            iosCloud(u * 0.66f, u * 0.40f, u * 0.50f, CloudGrey.first, CloudGrey.second)
+            iosCloud(u * 0.44f, u * 0.62f, u * 0.74f, CloudLight.first, CloudLight.second)
+        }
+        WxScene.Drizzle, WxScene.Rain -> {
+            iosCloud(u * 0.50f, u * 0.42f, u * 0.78f, CloudDark.first, CloudDark.second)
+            val xs = if (scene == WxScene.Rain) listOf(0.34f, 0.52f, 0.70f) else listOf(0.42f, 0.62f)
+            xs.forEachIndexed { i, x ->
+                val y = 0.68f + 0.04f * (i % 2)
+                drawLine(Color(0xFF5AC8FA), o(x, y), o(x - 0.05f, y + 0.15f), strokeWidth = u * 0.055f, cap = StrokeCap.Round)
+            }
+        }
+        WxScene.Storm -> {
+            iosCloud(u * 0.50f, u * 0.40f, u * 0.78f, CloudDark.first, CloudDark.second)
+            val bolt = Path().apply {
+                moveTo(u * 0.55f, u * 0.58f)
+                lineTo(u * 0.40f, u * 0.81f)
+                lineTo(u * 0.51f, u * 0.81f)
+                lineTo(u * 0.45f, u * 0.98f)
+                lineTo(u * 0.67f, u * 0.72f)
+                lineTo(u * 0.55f, u * 0.72f)
+                lineTo(u * 0.62f, u * 0.58f)
+                close()
+            }
+            drawPath(bolt, Brush.verticalGradient(listOf(Color(0xFFFFE45C), Color(0xFFFFB400)), startY = u * 0.58f, endY = u * 0.98f))
+        }
+        WxScene.Snow -> {
+            iosCloud(u * 0.50f, u * 0.40f, u * 0.78f, CloudGrey.first, CloudGrey.second)
+            for ((x, y) in listOf(0.34f to 0.76f, 0.52f to 0.86f, 0.70f to 0.74f)) {
+                for (k in 0 until 3) {
+                    val a = Math.toRadians(k * 60.0).toFloat()
+                    drawLine(
+                        Color.White, o(x, y) - Offset(cos(a), sin(a)) * (u * 0.05f), o(x, y) + Offset(cos(a), sin(a)) * (u * 0.05f),
+                        strokeWidth = line * 0.7f, cap = StrokeCap.Round,
+                    )
+                }
+            }
+        }
+        WxScene.Fog -> {
+            iosCloud(u * 0.50f, u * 0.36f, u * 0.70f, CloudGrey.first, CloudGrey.second)
+            for ((i, xs) in listOf(0.22f to 0.78f, 0.30f to 0.70f, 0.24f to 0.74f).withIndex()) {
+                drawLine(Color(0xFFDCE4EE), o(xs.first, 0.63f + i * 0.11f), o(xs.second, 0.63f + i * 0.11f), strokeWidth = u * 0.055f, cap = StrokeCap.Round)
+            }
+        }
     }
 }
 
 @Composable
+private fun WxIcon(scene: WxScene, night: Boolean, modifier: Modifier) {
+    Canvas(modifier) { iosIcon(scene, night) }
+}
+
+private fun sceneName(scene: WxScene, night: Boolean): String = when (scene) {
+    WxScene.Clear -> if (night) "Clear" else "Sunny"
+    WxScene.PartlyCloudy -> "Partly cloudy"
+    WxScene.Cloudy -> "Cloudy"
+    WxScene.Fog -> "Fog"
+    WxScene.Drizzle -> "Drizzle"
+    WxScene.Rain -> "Rain"
+    WxScene.Snow -> "Snow"
+    WxScene.Storm -> "Thunderstorm"
+}
+
+// ---- Weather tile data (read from Weather, with sensible fallbacks) ----
+
+private class WxDay(val label: String, val scene: WxScene, val hi: String?, val lo: String?)
+private class WxNow(val temp: String?, val text: String, val hiLo: String?)
+
+/** The next days of the forecast (up to 5), for the strip at the bottom of the tile. Empty when Weather has none. */
+private fun wxDays(w: Weather?, fallback: WxScene): List<WxDay> {
+    if (w == null) return emptyList()
+    val list: List<Any?> = (w.days as? List<*>) ?: emptyList<Any?>()
+    val cal = Calendar.getInstance()
+    return list.take(5).mapIndexed { i, d ->
+        val c = (d.peek("code", "weatherCode", "wmo", "condition", "icon") as? Number)?.toInt()
+        val label = if (i == 0) "Today" else {
+            val day = (cal.clone() as Calendar).apply { add(Calendar.DAY_OF_MONTH, i) }
+            SimpleDateFormat("EEE", Locale.getDefault()).format(day.time)
+        }
+        WxDay(
+            label,
+            if (c != null) sceneOf(c) else fallback,
+            degrees(d.peek("max", "high", "tempMax", "hi", "maxTemp", "temperatureMax", "tMax", "tempHigh")),
+            degrees(d.peek("min", "low", "tempMin", "lo", "minTemp", "temperatureMin", "tMin", "tempLow")),
+        )
+    }
+}
+
+private fun wxNow(w: Weather?, scene: WxScene, night: Boolean, days: List<WxDay>): WxNow {
+    val text = (w.peek("description", "desc", "text", "condition", "conditionText", "summary", "label") as? String)
+        ?.takeIf { it.isNotBlank() } ?: sceneName(scene, night)
+    val today = days.firstOrNull()
+    val hiLo = if (today?.hi != null && today.lo != null) "H:${today.hi}  L:${today.lo}" else null
+    val temp = w.peek("temp", "temperature", "tempC", "currentTemp", "current", "now")
+        ?: w.fuzzy(listOf("temp"), listOf("max", "min", "high", "low", "feel", "app"))
+    return WxNow(degrees(temp), text, hiLo)
+}
+
+@Composable
 private fun WeatherCard(backdrop: Backdrop, weather: Weather?, focused: Boolean, enter: () -> Float, modifier: Modifier) {
-    val shape = RoundedCornerShape(28.dp)
+    val shape = RoundedCornerShape(30.dp)
     // Night = outside the sunrise..sunset of the place (the same times the sun card uses).
     val sun = remember(weather) { sunTimes(weather) }
     val night = System.currentTimeMillis() !in sun.first..sun.second
-    val sky = sceneOf(weather?.takeIf { !it.isPlaceholder }?.code)
+    val live = weather?.takeIf { !it.isPlaceholder }
+    val scene = sceneOf(live?.code)
+    val days = remember(live) { wxDays(live, scene) }
+    val now = remember(live, night) { wxNow(live, scene, night, days) }
     Box(modifier.enterTile(enter, 0).widgetCard(shape, focused)) {
-        WeatherScene(sky, night, enter, Modifier.matchParentSize().clip(shape))
-        Column(Modifier.fillMaxSize().padding(18.dp)) {
-            BasicText("Weather", style = txt(Orange, 15.sp, FontWeight.SemiBold))
-            if (weather != null && weather.place.isNotBlank()) {
-                BasicText(weather.place, style = txt(Color.White.copy(alpha = 0.8f), 13.sp, FontWeight.Medium), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            Spacer(Modifier.weight(1f))
-            if (weather != null) {
-                // The same weather text as the home screen, drawn bigger.
-                Box(
-                    Modifier.graphicsLayer {
-                        scaleX = 1.7f
-                        scaleY = 1.7f
-                        transformOrigin = TransformOrigin(0f, 0.5f)
-                        // The big weather text fades in a moment after its card.
-                        alpha = WidgetsEnter.out(WidgetsEnter.local(enter(), 0f, 450f, 300f))
-                    },
-                ) {
-                    WeatherPill(backdrop, weather, false, Modifier, visible = true, plain = true)
+        WeatherScene(scene, night, enter, Modifier.matchParentSize().clip(shape))
+        Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 16.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                Column(Modifier.weight(1f)) {
+                    if (weather != null && weather.place.isNotBlank()) {
+                        BasicText(weather.place, style = txt(Color.White.copy(alpha = 0.92f), 15.sp, FontWeight.SemiBold), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    } else {
+                        BasicText("Weather", style = txt(Orange, 15.sp, FontWeight.SemiBold))
+                    }
+                    when {
+                        now.temp != null -> {
+                            BasicText(now.temp, style = txt(Color.White, 58.sp, FontWeight.Light))
+                            BasicText(now.text, style = txt(Color.White, 16.sp, FontWeight.Medium))
+                            if (now.hiLo != null) {
+                                BasicText(now.hiLo, style = txt(Color.White.copy(alpha = 0.8f), 13.sp, FontWeight.Medium))
+                            }
+                        }
+                        weather != null -> {
+                            // The temperature could not be read from Weather: use the same weather text as the home screen.
+                            Spacer(Modifier.height(18.dp))
+                            Box(Modifier.graphicsLayer { scaleX = 1.7f; scaleY = 1.7f; transformOrigin = TransformOrigin(0f, 0.5f) }) {
+                                WeatherPill(backdrop, weather, false, Modifier, visible = true, plain = true)
+                            }
+                        }
+                        else -> BasicText("Weather isn't available yet", style = txt(Color.White.copy(alpha = 0.7f), 14.sp, FontWeight.Medium))
+                    }
                 }
-            } else {
-                BasicText("Weather isn't available yet", style = txt(Color.White.copy(alpha = 0.7f), 14.sp, FontWeight.Medium))
+                WxIcon(
+                    scene, night,
+                    Modifier
+                        .size(84.dp)
+                        .graphicsLayer {
+                            // The icon pops in a moment after its card.
+                            val l = WidgetsEnter.local(enter(), 0f, 500f, 250f)
+                            val sc = WidgetsEnter.back(l)
+                            scaleX = sc
+                            scaleY = sc
+                            alpha = l
+                        },
+                )
             }
             Spacer(Modifier.weight(1f))
+            if (days.isNotEmpty()) {
+                Box(Modifier.fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.22f)))
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth()) {
+                    days.forEachIndexed { i, d ->
+                        Column(
+                            Modifier
+                                .weight(1f)
+                                .graphicsLayer {
+                                    // The forecast fades up one day after another.
+                                    val l = WidgetsEnter.out(WidgetsEnter.local(enter(), 0f, 400f, 450f + i * 70f))
+                                    alpha = l
+                                    translationY = (1f - l) * 10.dp.toPx()
+                                },
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            BasicText(d.label, style = txt(Color.White.copy(alpha = 0.78f), 12.sp, FontWeight.Medium))
+                            Spacer(Modifier.height(3.dp))
+                            WxIcon(d.scene, false, Modifier.size(30.dp))
+                            Spacer(Modifier.height(3.dp))
+                            if (d.hi != null) BasicText(d.hi, style = txt(Color.White, 14.sp, FontWeight.SemiBold))
+                            if (d.lo != null) BasicText(d.lo, style = txt(Color.White.copy(alpha = 0.65f), 13.sp, FontWeight.Medium))
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -493,15 +714,21 @@ private fun CalendarCard(enter: () -> Float, modifier: Modifier) {
     val start = (now.clone() as Calendar).apply { set(Calendar.DAY_OF_MONTH, 1) }
     val offset = (start.get(Calendar.DAY_OF_WEEK) + 5) % 7 // Monday = 0
     start.add(Calendar.DAY_OF_MONTH, -offset)
-    val title = SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(now.time)
+    val monthName = SimpleDateFormat("LLLL", Locale.getDefault()).format(now.time).uppercase()
+    val year = now.get(Calendar.YEAR).toString()
     val names = listOf("M", "T", "W", "T", "F", "S", "S")
-    Column(modifier.enterTile(enter, 1).widgetCard(RoundedCornerShape(28.dp)).padding(18.dp)) {
-        BasicText(title, style = txt(Color.White, 20.sp, FontWeight.Bold))
-        Spacer(Modifier.height(8.dp))
+    Column(modifier.enterTile(enter, 1).widgetCard(RoundedCornerShape(30.dp)).padding(18.dp)) {
+        // Like the iPhone Calendar widget: the month in red capitals, the year small and grey.
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            BasicText(monthName, style = txt(IosRed, 15.sp, FontWeight.Bold).copy(letterSpacing = 0.8.sp))
+            Spacer(Modifier.weight(1f))
+            BasicText(year, style = txt(Color.White.copy(alpha = 0.5f), 13.sp, FontWeight.Medium))
+        }
+        Spacer(Modifier.height(6.dp))
         Row(Modifier.fillMaxWidth()) {
             names.forEach {
                 Box(Modifier.weight(1f).height(22.dp), contentAlignment = Alignment.Center) {
-                    BasicText(it, style = txt(Color.White.copy(alpha = 0.75f), 13.sp, FontWeight.SemiBold))
+                    BasicText(it, style = txt(Color.White.copy(alpha = 0.5f), 12.sp, FontWeight.SemiBold))
                 }
             }
         }
@@ -529,21 +756,24 @@ private fun CalendarCard(enter: () -> Float, modifier: Modifier) {
                         if (isToday) {
                             Box(
                                 Modifier
-                                    .width(36.dp).height(28.dp)
+                                    .size(26.dp)
                                     .graphicsLayer {
-                                        // Today's blue square pops in last.
+                                        // Today's red circle pops in last.
                                         val l = WidgetsEnter.local(enter(), 1f, 420f, 900f)
                                         val sc = WidgetsEnter.back(l)
                                         scaleX = sc
                                         scaleY = sc
                                         alpha = l
                                     }
-                                    .background(Blue, RoundedCornerShape(9.dp)),
+                                    .background(IosRed, RoundedCornerShape(50)),
                             )
                         }
                         BasicText(
                             d.get(Calendar.DAY_OF_MONTH).toString(),
-                            style = txt(Color.White.copy(alpha = if (inMonth) 1f else 0.25f), 15.sp, FontWeight.Medium),
+                            style = txt(
+                                Color.White.copy(alpha = if (inMonth) 1f else 0.25f), 14.sp,
+                                if (isToday) FontWeight.Bold else FontWeight.Medium,
+                            ),
                         )
                     }
                 }
@@ -555,21 +785,95 @@ private fun CalendarCard(enter: () -> Float, modifier: Modifier) {
 // ---- Sun: sunrise, sunset and the weather readings (under the weather card) ----
 
 /**
- * The four readings on the right of the sun card, as (label, value).
- * TODO: connect these to your Weather class (wind, humidity, temperature, pressure). Until then they show "--".
+ * Reads a value out of the Weather object (or one of its forecast days) by trying a few common property names,
+ * so this file does not depend on how Weather names things. Returns null when none of the names exist.
  */
-private fun weatherStats(w: Weather?): List<Pair<String, String>> = listOf(
-    "Wind" to "--",
-    "Humidity" to "--",
-    "Temp" to "--",
-    "Pressure" to "--",
-)
+private fun Any?.peek(vararg names: String): Any? {
+    if (this == null) return null
+    for (n in names) {
+        try {
+            val cap = n.replaceFirstChar { it.uppercase() }
+            val m = javaClass.methods.firstOrNull {
+                it.parameterCount == 0 && (it.name == "get$cap" || it.name == n || it.name == "is$cap")
+            }
+            val v = if (m != null) m.invoke(this) else javaClass.getDeclaredField(n).also { it.isAccessible = true }.get(this)
+            if (v != null) return v
+        } catch (_: Throwable) {
+            // Not there under this name: try the next one.
+        }
+    }
+    return null
+}
+
+/**
+ * A second try when the exact names are not there: looks through every field of the object for one whose name
+ * contains one of [keys] (and none of [avoid]) and holds a number, so "wind_speed_10m" or "relativeHumidity" are found too.
+ */
+private fun Any?.fuzzy(keys: List<String>, avoid: List<String> = emptyList()): Any? {
+    if (this == null) return null
+    var c: Class<*>? = javaClass
+    while (c != null && c != Any::class.java) {
+        for (f in c.declaredFields) {
+            val n = f.name.lowercase()
+            if (f.isSynthetic || keys.none { n.contains(it) } || avoid.any { n.contains(it) }) continue
+            try {
+                f.isAccessible = true
+                val v = f.get(this)
+                if (v.asNumber() != null) return v
+            } catch (_: Throwable) {
+                // Not readable: try the next field.
+            }
+        }
+        c = c.superclass
+    }
+    return null
+}
+
+private fun Any?.asNumber(): Double? = when (this) {
+    is Number -> toDouble()
+    is String -> filter { it.isDigit() || it == '-' || it == '.' }.toDoubleOrNull()
+    else -> null
+}
+
+private fun degrees(v: Any?): String? = v.asNumber()?.let { "${it.roundToInt()}\u00B0" }
+
+/** The four readings on the right of the sun card, as (label, value). A reading that Weather does not have shows "--". */
+private fun weatherStats(w: Weather?): List<Pair<String, String>> {
+    fun reading(unit: String, key: String, avoid: List<String>, vararg names: String): String =
+        (w.peek(*names) ?: w.fuzzy(listOf(key), avoid))?.asNumber()?.let { "${it.roundToInt()}$unit" } ?: "--"
+    return listOf(
+        "Wind" to reading(" km/h", "wind", listOf("dir", "deg", "gust"), "windSpeed", "wind", "windKph", "windKmh", "wind_speed"),
+        "Humidity" to reading("%", "humid", emptyList(), "humidity", "relativeHumidity", "humid"),
+        "Temp" to reading("\u00B0C", "temp", listOf("max", "min", "high", "low", "feel", "app"), "temp", "temperature", "tempC", "currentTemp"),
+        "Pressure" to reading(" hPa", "press", emptyList(), "pressure", "pressureHpa", "pressureMb", "surfacePressure"),
+    )
+}
 
 /** Sunrise and sunset of the place (or the usual times while the weather is not loaded), the same as HomeScreen uses. */
 private fun sunTimes(w: Weather?): Pair<Long, Long> =
     w?.takeIf { !it.isPlaceholder && it.sunrise > 0L && it.sunset > 0L }
         ?.let { it.sunrise + WeatherRepository.skewMs(it.zone) to it.sunset + WeatherRepository.skewMs(it.zone) }
         ?: WeatherRepository.fallbackTimes()
+
+/** The small "sunset" glyph (half a sun on the horizon) in the card's title. */
+@Composable
+private fun SunGlyph(modifier: Modifier) {
+    Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        val orange = Color(0xFFFF9F0A)
+        drawArc(orange, 180f, 180f, true, topLeft = Offset(w * 0.2f, h * 0.75f - w * 0.3f), size = Size(w * 0.6f, w * 0.6f))
+        drawLine(orange, Offset(0f, h * 0.75f), Offset(w, h * 0.75f), strokeWidth = h * 0.1f, cap = StrokeCap.Round)
+    }
+}
+
+@Composable
+private fun SunStat(label: String, value: String, modifier: Modifier) {
+    Column(modifier) {
+        BasicText(label, style = txt(Color.White.copy(alpha = 0.55f), 11.sp, FontWeight.Medium))
+        BasicText(value, style = txt(Color.White, 14.sp, FontWeight.SemiBold), maxLines = 1)
+    }
+}
 
 @Composable
 private fun SunCard(weather: Weather?, enter: () -> Float, modifier: Modifier) {
@@ -585,56 +889,61 @@ private fun SunCard(weather: Weather?, enter: () -> Float, modifier: Modifier) {
         (now - sun.first).toFloat() / (sun.second - sun.first).toFloat()
     } else null
     val clock = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+    // Like the iPhone: the card features the next event (sunset by day, sunrise at night) and mentions the other one.
+    val sunsetNext = t != null
     val stats = weatherStats(weather)
-    val dim = Color.White.copy(alpha = 0.75f)
     Row(
-        modifier.enterTile(enter, 2).widgetCard(RoundedCornerShape(28.dp)).padding(horizontal = 18.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        modifier.enterTile(enter, 2).widgetCard(RoundedCornerShape(30.dp)).padding(horizontal = 18.dp, vertical = 14.dp),
     ) {
-        // Left: the sun arc with sunrise and sunset under its two ends.
-        Column(Modifier.weight(1f).fillMaxHeight()) {
-            SunArc(t, enter, Modifier.weight(1f).fillMaxWidth())
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .graphicsLayer {
-                        // Sunrise and sunset fade up once the arc has drawn itself.
-                        val l = WidgetsEnter.out(WidgetsEnter.local(enter(), 2f, 400f, 500f))
-                        alpha = l
-                        translationY = (1f - l) * 8.dp.toPx()
-                    },
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Column {
-                    BasicText("Sunrise", style = txt(dim, 12.sp, FontWeight.Medium))
-                    BasicText(clock.format(Date(sun.first)), style = txt(Color.White, 14.sp, FontWeight.SemiBold))
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    BasicText("Sunset", style = txt(dim, 12.sp, FontWeight.Medium))
-                    BasicText(clock.format(Date(sun.second)), style = txt(Color.White, 14.sp, FontWeight.SemiBold))
-                }
-            }
-        }
-        Box(
-            Modifier.padding(horizontal = 14.dp).width(1.dp).fillMaxHeight(0.8f)
-                .background(Color.White.copy(alpha = 0.15f)),
-        )
-        // Right: wind, humidity, temperature, pressure.
         Column(
             Modifier
                 .weight(1f)
                 .fillMaxHeight()
                 .graphicsLayer {
+                    val l = WidgetsEnter.out(WidgetsEnter.local(enter(), 2f, 400f, 450f))
+                    alpha = l
+                    translationY = (1f - l) * 8.dp.toPx()
+                },
+            verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SunGlyph(Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                BasicText(
+                    if (sunsetNext) "SUNSET" else "SUNRISE",
+                    style = txt(Color.White.copy(alpha = 0.6f), 12.sp, FontWeight.SemiBold).copy(letterSpacing = 0.8.sp),
+                )
+            }
+            Column {
+                BasicText(
+                    clock.format(Date(if (sunsetNext) sun.second else sun.first)),
+                    style = txt(Color.White, 40.sp, FontWeight.Light),
+                )
+                BasicText(
+                    (if (sunsetNext) "Sunrise: " else "Sunset: ") + clock.format(Date(if (sunsetNext) sun.first else sun.second)),
+                    style = txt(Color.White.copy(alpha = 0.6f), 13.sp, FontWeight.Medium),
+                )
+            }
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1.2f).fillMaxHeight()) {
+            SunArc(t, enter, Modifier.weight(1f).fillMaxWidth())
+            Spacer(Modifier.height(6.dp))
+            Column(
+                Modifier.graphicsLayer {
                     val l = WidgetsEnter.out(WidgetsEnter.local(enter(), 2f, 400f, 600f))
                     alpha = l
-                    translationX = (1f - l) * 14.dp.toPx()
+                    translationY = (1f - l) * 8.dp.toPx()
                 },
-            verticalArrangement = Arrangement.SpaceEvenly,
-        ) {
-            stats.forEach { (label, value) ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    BasicText(label, style = txt(Color.White.copy(alpha = 0.7f), 13.sp, FontWeight.Medium))
-                    BasicText(value, style = txt(Color.White, 13.sp, FontWeight.SemiBold))
+            ) {
+                Row(Modifier.fillMaxWidth()) {
+                    SunStat(stats[0].first, stats[0].second, Modifier.weight(1f))
+                    SunStat(stats[1].first, stats[1].second, Modifier.weight(1f))
+                }
+                Spacer(Modifier.height(4.dp))
+                Row(Modifier.fillMaxWidth()) {
+                    SunStat(stats[2].first, stats[2].second, Modifier.weight(1f))
+                    SunStat(stats[3].first, stats[3].second, Modifier.weight(1f))
                 }
             }
         }
@@ -642,54 +951,49 @@ private fun SunCard(weather: Weather?, enter: () -> Float, modifier: Modifier) {
 }
 
 /**
- * The dashed sun arc. [t] = 0..1 is how far the sun is along it (null = night, no sun).
- * On entrance the arc draws itself from sunrise to sunset, then the sun travels from sunrise to its place.
+ * The sun's path over a horizon line, like the iPhone Weather widget. [t] = 0..1 is how far the sun is along it
+ * (null = night, no sun). On entrance the path draws itself, then the sun travels along it.
  */
 @Composable
 private fun SunArc(t: Float?, enter: () -> Float, modifier: Modifier) {
     Canvas(modifier) {
         val raw = enter()
-        val drawn = WidgetsEnter.local(raw, 2f, 700f, 150f)                          // how much of the arc is drawn
+        val drawn = WidgetsEnter.local(raw, 2f, 700f, 150f)                          // how much of the path is drawn
         val travel = WidgetsEnter.out(WidgetsEnter.local(raw, 2f, 800f, 450f))      // how far the sun has travelled
-        val pad = 10.dp.toPx()
-        val x0 = pad
-        val x1 = size.width - pad
-        val yb = size.height - 8.dp.toPx()
-        val peak = 6.dp.toPx()
-        val cx = (x0 + x1) / 2f
-        val cy = 2f * peak - yb // control point of the curve: its top lands on [peak]
-        fun ax(u: Float) = (1 - u) * (1 - u) * x0 + 2 * (1 - u) * u * cx + u * u * x1
-        fun ay(u: Float) = (1 - u) * (1 - u) * yb + 2 * (1 - u) * u * cy + u * u * yb
-        val steps = 48
-        val tt = t?.let { it * travel }
-        if (tt != null && tt > 0f) {
-            // The soft area under the arc, up to the sun.
-            val n = (steps * tt).toInt().coerceAtLeast(1)
-            val shade = Path().apply {
-                moveTo(x0, yb)
-                for (i in 0..n) lineTo(ax(tt * i / n), ay(tt * i / n))
-                lineTo(ax(tt), yb)
-                close()
-            }
-            drawPath(shade, Color.White.copy(alpha = 0.10f))
-        }
+        val pi = Math.PI.toFloat()
+        val x0 = 4.dp.toPx()
+        val x1 = size.width - 4.dp.toPx()
+        val horizon = size.height * 0.74f
+        val amp = size.height * 0.62f
+        fun px(u: Float) = x0 + (x1 - x0) * u
+        fun py(u: Float) = horizon - amp * sin(pi * u)
+        val steps = 60
+        // The horizon.
+        drawLine(Color.White.copy(alpha = 0.30f * drawn), Offset(0f, horizon), Offset(size.width, horizon), strokeWidth = 1.dp.toPx())
+        // The whole path (soft), drawn from the left as far as [drawn].
         if (drawn > 0f) {
             val n = (steps * drawn).toInt().coerceAtLeast(1)
-            val arc = Path().apply {
-                moveTo(ax(0f), ay(0f))
-                for (i in 1..n) lineTo(ax(drawn * i / n), ay(drawn * i / n))
+            val all = Path().apply {
+                moveTo(px(0f), py(0f))
+                for (i in 1..n) lineTo(px(drawn * i / n), py(drawn * i / n))
             }
-            drawPath(
-                arc, Color.White,
-                style = Stroke(
-                    width = 2.dp.toPx(),
-                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 4.dp.toPx())),
-                ),
-            )
+            drawPath(all, Color.White.copy(alpha = 0.35f), style = Stroke(2.dp.toPx(), cap = StrokeCap.Round))
         }
-        drawCircle(Color.White.copy(alpha = drawn), 4.dp.toPx(), Offset(x0, yb))
-        drawCircle(Color.White.copy(alpha = drawn), 4.dp.toPx(), Offset(x1, yb))
-        if (tt != null) drawCircle(SunYellow.copy(alpha = drawn), 8.dp.toPx(), Offset(ax(tt), ay(tt)))
+        // The part the sun has already travelled (bright) and the sun itself.
+        val tt = t?.let { it * travel }
+        if (tt != null && tt > 0f) {
+            val n = (steps * tt).toInt().coerceAtLeast(1)
+            val done = Path().apply {
+                moveTo(px(0f), py(0f))
+                for (i in 1..n) lineTo(px(tt * i / n), py(tt * i / n))
+            }
+            drawPath(done, Color.White.copy(alpha = 0.95f), style = Stroke(2.dp.toPx(), cap = StrokeCap.Round))
+        }
+        if (tt != null) {
+            val c = Offset(px(tt), py(tt))
+            drawCircle(Brush.radialGradient(listOf(Color(0x88FFC53D), Color.Transparent), center = c, radius = 14.dp.toPx()), 14.dp.toPx(), c)
+            drawCircle(SunYellow.copy(alpha = drawn), 5.dp.toPx(), c)
+        }
     }
 }
 
@@ -704,7 +1008,7 @@ private fun formatDuration(ms: Long): String {
 }
 
 @Suppress("DEPRECATION")
-private fun hasUsageAccess(context: Context): Boolean {
+internal fun hasUsageAccess(context: Context): Boolean {
     val ops = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
     val mode = if (Build.VERSION.SDK_INT >= 29) {
         ops.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName)
@@ -712,6 +1016,26 @@ private fun hasUsageAccess(context: Context): Boolean {
         ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName)
     }
     return mode == AppOpsManager.MODE_ALLOWED
+}
+
+/**
+ * Opens the TV's "Usage access" settings (on the page of this app when the TV allows it).
+ * Returns false when the TV has no such screen: then use the adb command that the screen time card shows.
+ */
+internal fun openUsageAccessSettings(context: Context): Boolean {
+    val forThisApp = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+        .setData(Uri.parse("package:${context.packageName}"))
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    val general = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    for (intent in listOf(forThisApp, general)) {
+        try {
+            context.startActivity(intent)
+            return true
+        } catch (_: Exception) {
+            // This screen does not exist on this TV: try the next one.
+        }
+    }
+    return false
 }
 
 /** Today's foreground time per app (needs "Usage access" for this app in the TV's settings). */
@@ -736,6 +1060,24 @@ private fun loadScreenTime(context: Context): WidgetScreenTime {
     return WidgetScreenTime(true, used.sumOf { it.totalTimeInForeground }, top)
 }
 
+/** The small Screen Time glyph (a white hourglass on indigo) in the card's title. */
+@Composable
+private fun HourglassGlyph(modifier: Modifier) {
+    Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        drawRoundRect(Color(0xFF5E5CE6), cornerRadius = CornerRadius(w * 0.28f))
+        val top = Path().apply {
+            moveTo(w * 0.30f, h * 0.24f); lineTo(w * 0.70f, h * 0.24f); lineTo(w * 0.5f, h * 0.5f); close()
+        }
+        val bottom = Path().apply {
+            moveTo(w * 0.5f, h * 0.5f); lineTo(w * 0.30f, h * 0.76f); lineTo(w * 0.70f, h * 0.76f); close()
+        }
+        drawPath(top, Color.White)
+        drawPath(bottom, Color.White)
+    }
+}
+
 @Composable
 private fun ScreenTimeCard(enter: () -> Float, modifier: Modifier) {
     val context = LocalContext.current
@@ -744,33 +1086,71 @@ private fun ScreenTimeCard(enter: () -> Float, modifier: Modifier) {
     }
     val u = usage
     Column(
-        modifier.enterTile(enter, 3).widgetCard(RoundedCornerShape(28.dp)).padding(horizontal = 18.dp, vertical = 14.dp),
+        modifier.enterTile(enter, 3).widgetCard(RoundedCornerShape(30.dp)).padding(horizontal = 18.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            BasicText("Screen time", style = txt(Orange, 15.sp, FontWeight.SemiBold))
-            if (u != null && u.granted) {
-                BasicText("${formatDuration(u.totalMs)} today", style = txt(Color.White, 15.sp, FontWeight.SemiBold))
-            }
+        // Like the iPhone Screen Time widget: a small title, the big total, a bar split by app, and the top apps.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            HourglassGlyph(Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+            BasicText(
+                "SCREEN TIME",
+                style = txt(Color.White.copy(alpha = 0.6f), 12.sp, FontWeight.SemiBold).copy(letterSpacing = 0.8.sp),
+            )
         }
         if (u != null && !u.granted) {
-            BasicText(
-                "Allow Usage access for Glass in the TV settings to see your screen time.",
-                style = txt(Color.White.copy(alpha = 0.6f), 13.sp, FontWeight.Medium),
-            )
+            Column {
+                BasicText(
+                    "Usage access is off. Press OK to open the settings and allow Glass.",
+                    style = txt(Color.White.copy(alpha = 0.85f), 13.sp, FontWeight.Medium),
+                )
+                Spacer(Modifier.height(4.dp))
+                BasicText(
+                    "No such screen on this TV? Run: adb shell appops set ${context.packageName} GET_USAGE_STATS allow",
+                    style = txt(Color.White.copy(alpha = 0.5f), 11.sp, FontWeight.Medium),
+                )
+            }
         } else if (u != null) {
-            // One bar split by app (the grey part is every other app).
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column {
+                    BasicText(formatDuration(u.totalMs), style = txt(Color.White, 38.sp, FontWeight.Light))
+                    BasicText("Today", style = txt(Color.White.copy(alpha = 0.6f), 13.sp, FontWeight.Medium))
+                }
+                Column(Modifier.width(170.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    u.top.take(3).forEachIndexed { i, a ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .graphicsLayer {
+                                    // The top apps fade up one after another.
+                                    val l = WidgetsEnter.out(WidgetsEnter.local(enter(), 3f, 400f, 550f + i * 80f))
+                                    alpha = l
+                                    translationY = (1f - l) * 10.dp.toPx()
+                                },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(Modifier.size(8.dp).background(UsageColors[i], RoundedCornerShape(50)))
+                            Spacer(Modifier.width(6.dp))
+                            BasicText(
+                                a.label, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                style = txt(Color.White.copy(alpha = 0.85f), 12.sp, FontWeight.Medium),
+                            )
+                            BasicText(formatDuration(a.ms), style = txt(Color.White.copy(alpha = 0.6f), 12.sp, FontWeight.Medium))
+                        }
+                    }
+                }
+            }
+            // One bar split by app (the grey part is every other app); it grows from the left.
             val topSum = u.top.sumOf { it.ms }
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .height(10.dp)
+                    .height(8.dp)
                     .graphicsLayer {
-                        // The bar grows from the left.
                         scaleX = WidgetsEnter.out(WidgetsEnter.local(enter(), 3f, 650f, 300f))
                         transformOrigin = TransformOrigin(0f, 0.5f)
                     }
-                    .clip(RoundedCornerShape(5.dp)),
+                    .clip(RoundedCornerShape(4.dp)),
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 u.top.forEachIndexed { i, a ->
@@ -780,28 +1160,8 @@ private fun ScreenTimeCard(enter: () -> Float, modifier: Modifier) {
                 if (rest > 0L) Box(Modifier.weight(rest.toFloat()).fillMaxHeight().background(UsageOther))
                 if (u.top.isEmpty()) Box(Modifier.weight(1f).fillMaxHeight().background(UsageOther))
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (i in 0 until 4) {
-                    Column(
-                        Modifier
-                            .weight(1f)
-                            .graphicsLayer {
-                                // The app names and times fade up one after another.
-                                val l = WidgetsEnter.out(WidgetsEnter.local(enter(), 3f, 400f, 550f + i * 80f))
-                                alpha = l
-                                translationY = (1f - l) * 10.dp.toPx()
-                            },
-                    ) {
-                        u.top.getOrNull(i)?.let { a ->
-                            BasicText(
-                                a.label, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                style = txt(Color.White.copy(alpha = 0.7f), 12.sp, FontWeight.Medium),
-                            )
-                            BasicText(formatDuration(a.ms), style = txt(UsageColors[i], 14.sp, FontWeight.SemiBold))
-                        }
-                    }
-                }
-            }
+        } else {
+            Spacer(Modifier.height(1.dp))
         }
     }
 }
