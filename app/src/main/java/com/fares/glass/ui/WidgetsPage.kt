@@ -8,39 +8,70 @@ import android.net.Uri
 import android.provider.Settings
 import android.os.Build
 import android.os.Process
+import android.os.SystemClock
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -49,7 +80,9 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.PathOperation
@@ -61,16 +94,28 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fares.glass.data.Weather
 import com.fares.glass.data.WeatherRepository
+import com.fares.glass.sys.MemoryBoost
+import com.fares.glass.sys.NowPlaying
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -159,8 +204,9 @@ private fun Modifier.enterTile(raw: () -> Float, slot: Int): Modifier = graphics
 }
 
 /**
- * The widgets page (landscape, Android TV). Top row: the weather card and the month calendar, both the same size.
- * Bottom row: the sun card under the weather, and screen time under the calendar.
+ * The widgets page (landscape, Android TV). The first screen has the weather card and the month calendar on top,
+ * and the sun card and screen time under them. Below that come Boost RAM and the now playing vinyl.
+ * Up / Down move the focus, and the page glides down to show the row that has it.
  * HomeScreen shows it when Left is pressed on the first app and slides it in from the left (see [WidgetsMotion]).
  *
  * [progress] is read only while drawing (0 = hidden, 1 = shown), so animating it never recomposes the screen.
@@ -173,10 +219,25 @@ fun WidgetsPage(
     progress: () -> Float,
     modifier: Modifier = Modifier,
 ) {
-    // The entrance of the tiles. WidgetsPage is only composed while the page is shown, so this replays at every open.
+    val ctx = LocalContext.current
+
+    // The entrance of the tiles (the same as before).
     val enter = remember { Animatable(0f) }
     LaunchedEffect(Unit) { enter.animateTo(1f, tween(WidgetsEnter.TotalMs, easing = LinearEasing)) }
     val raw: () -> Float = { enter.value }
+
+    // Focus: 0 weather, 1 calendar, 2 sun, 3 screen time, 4 boost RAM, 5 vinyl.
+    // The widgets sit in rows of two: 0-1, 2-3, 4-5.
+    var focus by remember { mutableIntStateOf(0) }
+    // On the vinyl: 0 = previous, 1 = play / pause, 2 = next.
+    var vinylButton by remember { mutableIntStateOf(1) }
+    // Counts the OK presses on the Boost RAM widget.
+    var boostPress by remember { mutableIntStateOf(0) }
+
+    val scroll = rememberScrollState()
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
+
     Box(
         modifier
             .fillMaxSize()
@@ -184,10 +245,60 @@ fun WidgetsPage(
                 val p = progress()
                 // One strip with the home screen: the page enters from the left edge (-1 screen width -> 0).
                 translationX = (p - 1f) * size.width
-                // Blurred while it moves, sharp once it has settled (Android 12+; older versions slide without blur).
+                // Blurred while it moves, sharp once it has settled (Android 12+).
                 if (Build.VERSION.SDK_INT >= 31) {
                     val px = WidgetsMotion.MaxBlur.toPx() * WidgetsMotion.blurMix(p)
                     renderEffect = if (px > 0.5f) BlurEffect(px, px) else null
+                }
+            }
+            .focusRequester(focusRequester)
+            .focusable()
+            .onKeyEvent { e ->
+                if (e.type != KeyEventType.KeyDown) return@onKeyEvent false
+                when (e.key) {
+                    Key.DirectionDown -> {
+                        if (focus <= 3) focus += 2
+                        true
+                    }
+                    Key.DirectionUp -> {
+                        if (focus >= 2) focus -= 2
+                        true
+                    }
+                    Key.DirectionRight -> {
+                        if (focus == 5) {
+                            if (vinylButton < 2) vinylButton++
+                        } else if (focus % 2 == 0) {
+                            focus++
+                            if (focus == 5) vinylButton = 1
+                        }
+                        true
+                    }
+                    Key.DirectionLeft -> {
+                        if (focus == 5) {
+                            if (vinylButton > 0) {
+                                vinylButton--
+                            } else {
+                                focus = 4
+                            }
+                        } else if (focus % 2 == 1) {
+                            focus--
+                        }
+                        true
+                    }
+                    Key.DirectionCenter, Key.Enter -> {
+                        when (focus) {
+                            // Screen time: turns on Usage access when it is still off.
+                            3 -> if (!hasUsageAccess(ctx)) openUsageAccessSettings(ctx)
+                            4 -> boostPress++
+                            5 -> when (vinylButton) {
+                                0 -> NowPlaying.previous()
+                                1 -> NowPlaying.togglePlayPause()
+                                else -> NowPlaying.next()
+                            }
+                        }
+                        true
+                    }
+                    else -> false
                 }
             },
     ) {
@@ -196,25 +307,122 @@ fun WidgetsPage(
             Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, filterQuality = FilterQuality.Low)
         }
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)))
-        Column(
-            Modifier.fillMaxSize().padding(start = Metrics.Margin, end = Metrics.Margin, top = 36.dp, bottom = 36.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Row(Modifier.weight(150f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                WeatherCard(backdrop, weather, true, raw, Modifier.weight(1f).fillMaxHeight())
-                CalendarCard(raw, Modifier.weight(1f).fillMaxHeight())
+
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val gap = 14.dp
+            // The first screen keeps its old proportions: row 1 = 150 parts, row 2 = 112 parts.
+            val rowsH = maxHeight - 72.dp - gap
+            val row1H = rowsH * 150f / 262f
+            val row2H = rowsH * 112f / 262f
+            val row3H = row2H
+
+            // The page glides down until the bottom of the focused row is on screen.
+            val rowBottom = when (focus / 2) {
+                0 -> row1H
+                1 -> row1H + gap + row2H
+                else -> row1H + gap + row2H + gap + row3H
             }
-            Row(Modifier.weight(112f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                SunCard(weather, raw, Modifier.weight(1f).fillMaxHeight())
-                ScreenTimeCard(raw, Modifier.weight(1f).fillMaxHeight())
+            val target = (rowBottom + 72.dp - maxHeight).coerceAtLeast(0.dp)
+            val density = LocalDensity.current
+            LaunchedEffect(target) {
+                scroll.animateScrollTo(
+                    with(density) { target.roundToPx() },
+                    spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessLow),
+                )
             }
+
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .verticalScroll(scroll)
+                    .padding(start = Metrics.Margin, end = Metrics.Margin, top = 36.dp, bottom = 36.dp),
+                verticalArrangement = Arrangement.spacedBy(gap),
+            ) {
+                Row(Modifier.fillMaxWidth().height(row1H), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                    WidgetFocusFrame(focus == 0, Modifier.weight(1f).fillMaxHeight()) {
+                        WeatherCard(backdrop, weather, false, raw, Modifier.fillMaxSize())
+                    }
+                    WidgetFocusFrame(focus == 1, Modifier.weight(1f).fillMaxHeight()) {
+                        CalendarCard(raw, Modifier.fillMaxSize())
+                    }
+                }
+                Row(Modifier.fillMaxWidth().height(row2H), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                    WidgetFocusFrame(focus == 2, Modifier.weight(1f).fillMaxHeight()) {
+                        SunCard(weather, raw, Modifier.fillMaxSize())
+                    }
+                    WidgetFocusFrame(focus == 3, Modifier.weight(1f).fillMaxHeight()) {
+                        ScreenTimeCard(raw, Modifier.fillMaxSize())
+                    }
+                }
+                // These two are below the first screen, so they show up when the page glides down.
+                Row(Modifier.fillMaxWidth().height(row3H), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                    WidgetFocusFrame(focus == 4, Modifier.weight(1f).fillMaxHeight().riseInWidget(raw, 4f)) {
+                        BoostRamCard(boostPress, Modifier.fillMaxSize())
+                    }
+                    WidgetFocusFrame(focus == 5, Modifier.weight(1f).fillMaxHeight().riseInWidget(raw, 5f)) {
+                        VinylCard(rememberNowPlayingTrack(), if (focus == 5) vinylButton else -1, Modifier.fillMaxSize())
+                    }
+                }
+            }
+
+            // A round "back to top" button, like the one in the reference. It shows once the page has moved.
+            val showTop by remember { derivedStateOf { scroll.value > 40 } }
+            AnimatedVisibility(
+                visible = showTop,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 36.dp, bottom = 40.dp),
+                enter = fadeIn() + scaleIn(initialScale = 0.7f),
+                exit = fadeOut() + scaleOut(targetScale = 0.7f),
+            ) {
+                Box(
+                    Modifier
+                        .size(46.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.45f))
+                        .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Image(
+                        rememberVectorPainter(Icons.Rounded.KeyboardArrowUp),
+                        null,
+                        Modifier.size(24.dp),
+                        colorFilter = ColorFilter.tint(Color.White),
+                    )
+                }
+            }
+
+            // A soft fade under the top edge, so the cards slide away gently.
+            Box(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .height(36.dp)
+                    .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.5f), Color.Transparent))),
+            )
+
+            BasicText(
+                "Press Back to return home",
+                Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp),
+                style = txt(Color.White.copy(alpha = 0.55f), 12.sp, FontWeight.Medium),
+            )
         }
-        BasicText(
-            "Press Back to return home",
-            Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp),
-            style = txt(Color.White.copy(alpha = 0.55f), 12.sp, FontWeight.Medium),
-        )
     }
+}
+
+/** Puts the white focus outline around a widget. The widget grows a little when it has the focus. */
+@Composable
+private fun WidgetFocusFrame(focused: Boolean, modifier: Modifier, content: @Composable BoxScope.() -> Unit) {
+    val f by animateFloatAsState(if (focused) 1f else 0f, spring(stiffness = Spring.StiffnessMediumLow), label = "widgetFocus")
+    Box(modifier.graphicsLayer { scaleX = 1f + 0.02f * f; scaleY = 1f + 0.02f * f }) {
+        content()
+        Box(Modifier.matchParentSize().border(3.dp, Color.White.copy(alpha = f), RoundedCornerShape(30.dp)))
+    }
+}
+
+/** The new widgets rise in once when the page opens, like the others. */
+private fun Modifier.riseInWidget(enter: () -> Float, slot: Float): Modifier = graphicsLayer {
+    val l = WidgetsEnter.out(WidgetsEnter.local(enter(), slot))
+    alpha = l
+    translationY = (1f - l) * 44.dp.toPx()
 }
 
 // ---- Weather: a living sky behind the text (sun, moon, stars, clouds, rain, snow, fog, lightning) ----
@@ -1164,4 +1372,360 @@ private fun ScreenTimeCard(enter: () -> Float, modifier: Modifier) {
             Spacer(Modifier.height(1.dp))
         }
     }
+}
+
+// ---- Boost RAM ----
+
+private enum class BoostPhase { Idle, Working, Done, Failed }
+
+private val ramCard = Color(0xFF1C1C1E)
+private val ramBlue = Color(0xFF0A84FF)
+private val ramGreen = Color(0xFF30D158)
+private val ramOrange = Color(0xFFFF9F0A)
+private val ramRed = Color(0xFFFF453A)
+
+private fun ramTextStyle(color: Color, size: TextUnit, weight: FontWeight): TextStyle =
+    TextStyle(color = color, fontSize = size, fontWeight = weight)
+
+/**
+ * "Boost RAM" widget: a ring with the RAM in use, the free memory and a Boost button.
+ * [pressCount] goes up by one for every OK press while this widget has the focus. Each press runs a boost.
+ */
+@Composable
+fun BoostRamCard(pressCount: Int, modifier: Modifier = Modifier) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var stats by remember { mutableStateOf(MemoryBoost.read(ctx)) }
+    var phase by remember { mutableStateOf(BoostPhase.Idle) }
+    var freed by remember { mutableLongStateOf(0L) }
+    var message by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    val spinAngle = remember { mutableFloatStateOf(0f) }
+
+    // The memory is read every 2.5 seconds (not while a boost runs).
+    LaunchedEffect(Unit) {
+        while (true) {
+            if (!busy) stats = MemoryBoost.read(ctx)
+            delay(2500L)
+        }
+    }
+
+    fun runBoost() {
+        if (busy) return
+        busy = true
+        phase = BoostPhase.Working
+        scope.launch {
+            val result = MemoryBoost.boost(ctx)
+            if (result.ok) {
+                freed = result.freedBytes
+                message = ""
+                phase = BoostPhase.Done
+            } else {
+                message = result.message
+                phase = BoostPhase.Failed
+            }
+            stats = MemoryBoost.read(ctx)
+            busy = false
+            delay(4000L)
+            if (!busy) phase = BoostPhase.Idle
+        }
+    }
+
+    LaunchedEffect(pressCount) {
+        if (pressCount > 0) runBoost()
+    }
+
+    // The ring turns while a boost runs (only then).
+    LaunchedEffect(phase) {
+        if (phase != BoostPhase.Working) return@LaunchedEffect
+        var last = withFrameNanos { it }
+        while (true) {
+            withFrameNanos { now ->
+                spinAngle.floatValue = (spinAngle.floatValue + (now - last) / 1_000_000f * 0.3f) % 360f
+                last = now
+            }
+        }
+    }
+
+    val used by animateFloatAsState(stats.usedFraction, spring(stiffness = Spring.StiffnessLow), label = "ramUsed")
+    val percent = (used * 100f).roundToInt()
+    val ringColor = when {
+        used < 0.6f -> ramGreen
+        used < 0.8f -> ramOrange
+        else -> ramRed
+    }
+    val label = when (phase) {
+        BoostPhase.Idle -> "Boost"
+        BoostPhase.Working -> "Boosting\u2026"
+        BoostPhase.Done -> if (freed < 1_048_576L) "Already fast" else "Freed ${MemoryBoost.mb(freed)}"
+        BoostPhase.Failed -> "Needs ADB"
+    }
+    val pill = when (phase) {
+        BoostPhase.Failed -> ramRed
+        BoostPhase.Done -> ramGreen
+        else -> ramBlue
+    }
+    val freeLine = "${MemoryBoost.gb(stats.availBytes)} free of ${MemoryBoost.gb(stats.totalBytes)}"
+    val line = if (phase == BoostPhase.Failed && message.isNotEmpty()) message else freeLine
+    val shape = RoundedCornerShape(30.dp)
+
+    Row(
+        modifier
+            .clip(shape)
+            .background(ramCard.copy(alpha = 0.58f))
+            .border(1.dp, Color.White.copy(alpha = 0.14f), shape)
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(18.dp),
+    ) {
+        // The ring shows the share of RAM in use. It turns while the boost runs.
+        Box(Modifier.size(86.dp), contentAlignment = Alignment.Center) {
+            Canvas(Modifier.fillMaxSize()) {
+                val stroke = 9.dp.toPx()
+                val inset = stroke / 2f
+                val box = Size(size.width - stroke, size.height - stroke)
+                val corner = Offset(inset, inset)
+                val ringStyle = Stroke(width = stroke, cap = StrokeCap.Round)
+                drawArc(Color.White.copy(alpha = 0.16f), -90f, 360f, false, corner, box, style = ringStyle)
+                if (phase == BoostPhase.Working) {
+                    drawArc(ramBlue, spinAngle.floatValue, 110f, false, corner, box, style = ringStyle)
+                } else if (used > 0f) {
+                    drawArc(ringColor, -90f, 360f * used, false, corner, box, style = ringStyle)
+                }
+            }
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                BasicText("$percent%", style = ramTextStyle(Color.White, 22.sp, FontWeight.Light))
+                BasicText("used", style = ramTextStyle(Color.White.copy(alpha = 0.6f), 10.sp, FontWeight.Medium))
+            }
+        }
+
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+            BasicText(
+                "MEMORY",
+                style = ramTextStyle(Color.White.copy(alpha = 0.6f), 12.sp, FontWeight.SemiBold).copy(letterSpacing = 0.8.sp),
+                maxLines = 1,
+            )
+            Spacer(Modifier.height(4.dp))
+            BasicText(
+                line,
+                style = ramTextStyle(Color.White, 15.sp, FontWeight.SemiBold),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(10.dp))
+            // The pill button, like the blue buttons on iOS.
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(30.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(pill),
+                contentAlignment = Alignment.Center,
+            ) {
+                BasicText(label, style = ramTextStyle(Color.White, 13.sp, FontWeight.SemiBold), maxLines = 1)
+            }
+        }
+    }
+}
+
+// ---- Now playing (vinyl) ----
+
+/** What the Vinyl widget shows, read from NowPlaying. [art] is null when there is no picture. */
+class VinylTrack(
+    val title: String,
+    val artist: String,
+    val art: ImageBitmap?,
+    val playing: Boolean,
+    val positionMs: Long,
+    val durationMs: Long,
+)
+
+/**
+ * The song for the Vinyl widget, read straight from NowPlaying (the same data the media card uses).
+ * Returns null when nothing is playing. It is read again every half second, so the progress moves.
+ */
+@Composable
+fun rememberNowPlayingTrack(): VinylTrack? {
+    var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = SystemClock.elapsedRealtime()
+            delay(500L)
+        }
+    }
+    if (!NowPlaying.active) return null
+    return VinylTrack(
+        title = NowPlaying.title.ifBlank { "Now playing" },
+        artist = NowPlaying.artist,
+        art = NowPlaying.art,
+        playing = NowPlaying.playing,
+        positionMs = NowPlaying.position(now),
+        durationMs = NowPlaying.durationMs,
+    )
+}
+
+private val vinylBlue = Color(0xFF0A84FF)
+
+private fun vinylTextStyle(color: Color, size: TextUnit, weight: FontWeight): TextStyle =
+    TextStyle(color = color, fontSize = size, fontWeight = weight)
+
+/**
+ * iOS-style Now playing card with a spinning record: blurred album art behind, the record on the left,
+ * title, artist, progress and the three buttons on the right.
+ * [buttonFocus] is -1 when the card has no focus. Otherwise it is the highlighted button:
+ * 0 = previous, 1 = play / pause, 2 = next.
+ */
+@Composable
+fun VinylCard(track: VinylTrack?, buttonFocus: Int, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(30.dp)
+    val art = track?.art
+    val playing = track?.playing == true
+    val fraction = track?.let { t ->
+        if (t.durationMs > 0L) (t.positionMs.toFloat() / t.durationMs).coerceIn(0f, 1f) else 0f
+    } ?: 0f
+
+    // The record turns while music plays. It is read only while drawing, so it never recomposes the screen.
+    val angle = remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(playing) {
+        if (!playing) return@LaunchedEffect
+        var last = withFrameNanos { it }
+        while (true) {
+            withFrameNanos { now ->
+                angle.floatValue = (angle.floatValue + (now - last) / 1_000_000_000f * 40f) % 360f
+                last = now
+            }
+        }
+    }
+
+    Box(modifier.clip(shape).border(1.dp, Color.White.copy(alpha = 0.14f), shape)) {
+        // Background: the blurred album art, or a dusky gradient when there is no art.
+        if (art != null) {
+            Image(art, null, Modifier.fillMaxSize().blur(40.dp), contentScale = ContentScale.Crop)
+        } else {
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF3A3154), Color(0xFF14121E)))))
+        }
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f)))
+
+        Row(
+            Modifier.fillMaxSize().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
+            // The record. The label in the middle shows the album picture.
+            Box(
+                Modifier
+                    .fillMaxHeight()
+                    .aspectRatio(1f)
+                    .graphicsLayer { rotationZ = angle.floatValue },
+                contentAlignment = Alignment.Center,
+            ) {
+                Canvas(Modifier.fillMaxSize()) { drawRecord() }
+                Box(
+                    Modifier
+                        .fillMaxSize(0.44f)
+                        .clip(CircleShape)
+                        .background(Brush.verticalGradient(listOf(Color(0xFFFFB27A), Color(0xFFE8613C)))),
+                ) {
+                    if (art != null) Image(art, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                }
+                Box(Modifier.size(7.dp).clip(CircleShape).background(Color(0xFF0B0B0E)))
+            }
+
+            // The text, the progress and the buttons.
+            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.Center) {
+                BasicText(
+                    track?.title ?: "Nothing playing",
+                    style = vinylTextStyle(Color.White, 16.sp, FontWeight.Bold),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(2.dp))
+                BasicText(
+                    if (track == null) "Play music to see it here" else track.artist,
+                    style = vinylTextStyle(Color.White.copy(alpha = 0.66f), 12.sp, FontWeight.Medium),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(10.dp))
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(Color.White.copy(alpha = 0.25f)),
+                ) {
+                    Box(Modifier.fillMaxWidth(fraction).fillMaxHeight().background(Color.White))
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    val live = track != null
+                    VinylButton(Icons.Rounded.SkipPrevious, 22.dp, buttonFocus == 0, live, false)
+                    VinylButton(
+                        if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        20.dp, buttonFocus == 1, live, true,
+                    )
+                    VinylButton(Icons.Rounded.SkipNext, 22.dp, buttonFocus == 2, live, false)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VinylButton(
+    icon: ImageVector,
+    iconSize: Dp,
+    selected: Boolean,
+    enabled: Boolean,
+    filled: Boolean,
+) {
+    Box(
+        Modifier
+            .size(if (filled) 40.dp else 34.dp)
+            .clip(CircleShape)
+            .background(
+                when {
+                    filled -> Color.White.copy(alpha = if (enabled) 1f else 0.4f)
+                    selected -> Color.White.copy(alpha = 0.22f)
+                    else -> Color.Transparent
+                },
+            )
+            .border(2.dp, if (selected && filled) vinylBlue else Color.Transparent, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Image(
+            rememberVectorPainter(icon),
+            null,
+            Modifier.size(iconSize),
+            colorFilter = ColorFilter.tint(
+                if (filled) Color(0xFF101014) else Color.White.copy(alpha = if (enabled) 1f else 0.35f),
+            ),
+        )
+    }
+}
+
+/** The black vinyl: a dark disc with fine grooves and a light sheen across it. */
+private fun DrawScope.drawRecord() {
+    val r = size.minDimension / 2f
+    val c = Offset(size.width / 2f, size.height / 2f)
+    drawCircle(Brush.radialGradient(listOf(Color(0xFF2E2E34), Color(0xFF070709)), center = c, radius = r), r, c)
+    val step = 2.4f.dp.toPx()
+    var g = r * 0.40f
+    while (g < r * 0.96f) {
+        drawCircle(Color.White.copy(alpha = 0.07f), g, c, style = Stroke(0.8f.dp.toPx()))
+        g += step
+    }
+    drawCircle(
+        Brush.linearGradient(
+            listOf(Color.White.copy(alpha = 0.16f), Color.Transparent),
+            start = Offset.Zero,
+            end = Offset(size.width, size.height),
+        ),
+        r,
+        c,
+    )
 }
