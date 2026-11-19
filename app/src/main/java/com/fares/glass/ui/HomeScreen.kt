@@ -858,22 +858,23 @@ fun HomeScreen(
         return true
     }
 
-    /** Keys while the widgets page is open: Back (or Menu) slides it away again, OK opens the Usage access settings if needed. */
+    /** Keys while the widgets page is open. Back or Menu closes it. Arrows and OK go on to the page itself. */
     fun widgetsKey(e: AndroidKey): Boolean {
         val first = e.action == AndroidKey.ACTION_DOWN && e.repeatCount == 0
-        when (e.keyCode) {
-            // OK: turns on Usage access for the screen time card (when it is still off).
-            AndroidKey.KEYCODE_DPAD_CENTER, AndroidKey.KEYCODE_ENTER, AndroidKey.KEYCODE_NUMPAD_ENTER,
-            AndroidKey.KEYCODE_BUTTON_A -> if (first && !hasUsageAccess(context)) openUsageAccessSettings(context)
-            AndroidKey.KEYCODE_BACK, AndroidKey.KEYCODE_MENU, AndroidKey.KEYCODE_DPAD_RIGHT -> if (first) widgetsOpen = false
+        return when (e.keyCode) {
+            AndroidKey.KEYCODE_BACK, AndroidKey.KEYCODE_MENU -> {
+                if (first) widgetsOpen = false
+                true
+            }
+            // Everything else (arrows, OK) is not used here: it reaches WidgetsPage, which has the focus.
+            else -> false
         }
-        return true
     }
 
     fun onKey(event: KeyEvent): Boolean {
         val e = event.nativeKeyEvent
         activity++
-        if (dockHidden) {
+        if (dockHidden && !widgetsOpen) {
             // The first key only brings the dock back.
             dockHidden = false
             return true
