@@ -861,6 +861,8 @@ fun HomeScreen(
     /** Keys while the widgets page is open. Back or Menu closes it. Arrows and OK go on to the page itself. */
     fun widgetsKey(e: AndroidKey): Boolean {
         val first = e.action == AndroidKey.ACTION_DOWN && e.repeatCount == 0
+        // While a widget is open full screen, Back is for the page: it closes the card first.
+        if (WidgetsExpansion.widget >= 0 && e.keyCode == AndroidKey.KEYCODE_BACK) return false
         return when (e.keyCode) {
             AndroidKey.KEYCODE_BACK, AndroidKey.KEYCODE_MENU -> {
                 if (first) widgetsOpen = false
